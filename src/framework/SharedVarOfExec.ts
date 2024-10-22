@@ -1,9 +1,13 @@
-import { FrameworkSpecificConfig, RunTaskConfig } from './AdvancedExecutableInterface';
-import { TestGroupingConfig } from './TestGroupingInterface';
-import { ResolveRuleAsync } from './util/ResolveRule';
-import { TaskPool } from './util/TaskPool';
-import { Spawner, SpawnOptionsWithoutStdio } from './Spawner';
-import { WorkspaceShared } from './WorkspaceShared';
+import { FrameworkSpecificConfig, RunTaskConfig } from '../AdvancedExecutableInterface';
+import { TestGroupingConfig } from '../TestGroupingInterface';
+import { ResolveRuleAsync } from '../util/ResolveRule';
+import { TaskPool } from '../util/TaskPool';
+import { Spawner, SpawnOptionsWithoutStdio } from '../Spawner';
+import { WorkspaceShared } from '../WorkspaceShared';
+import { DebugConfigData } from '../DebugConfigType';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const hash = require('object-hash');
 
 export class SharedVarOfExec {
   constructor(
@@ -16,14 +20,19 @@ export class SharedVarOfExec {
     private readonly _frameworkSpecific: FrameworkSpecificConfig,
     _parallelizationLimit: number,
     readonly markAsSkipped: boolean,
+    readonly executableCloning: boolean,
+    readonly debugConfigData: DebugConfigData | undefined,
     readonly runTask: RunTaskConfig,
     readonly spawner: Spawner,
-    readonly sourceFileMap: Record<string, string>,
+    readonly resolvedSourceFileMap: Record<string, string>,
   ) {
     this.parallelizationPool = new TaskPool(_parallelizationLimit);
+    this.optionsHash = hash.MD5(options.env).substring(0, 6);
   }
 
   readonly parallelizationPool: TaskPool;
+
+  readonly optionsHash: string;
 
   get testGrouping(): TestGroupingConfig | undefined {
     return this._frameworkSpecific.testGrouping;

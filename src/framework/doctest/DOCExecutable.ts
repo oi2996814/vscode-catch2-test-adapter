@@ -6,15 +6,15 @@ import { AbstractExecutable, HandleProcessResult } from '../AbstractExecutable';
 
 import { DOCTest } from './DOCTest';
 import { SharedVarOfExec } from '../SharedVarOfExec';
-import { RunningExecutable } from '../RunningExecutable';
-import { CancellationFlag, parseLine, Version } from '../Util';
-import { TestGroupingConfig } from '../TestGroupingInterface';
-import { XmlParser, XmlTag, XmlTagProcessor } from '../util/XmlParser';
-import { assert, debugBreak } from '../util/DevelopmentHelper';
-import { TestResultBuilder } from '../TestResultBuilder';
-import { TestItemParent } from '../TestItemManager';
-import { SubTestTree } from '../AbstractTest';
-import { pipeProcess2Parser } from '../util/ParserInterface';
+import { RunningExecutable } from '../../RunningExecutable';
+import { CancellationFlag, Version } from '../../Util';
+import { TestGroupingConfig } from '../../TestGroupingInterface';
+import { XmlParser, XmlTag, XmlTagProcessor } from '../../util/XmlParser';
+import { assert, debugBreak } from '../../util/DevelopmentHelper';
+import { TestResultBuilder } from '../../TestResultBuilder';
+import { TestItemParent } from '../../TestItemManager';
+import { AbstractTest, SubTest, SubTestTree } from '../AbstractTest';
+import { pipeProcess2Parser } from '../../util/ParserInterface';
 
 export class DOCExecutable extends AbstractExecutable<DOCTest> {
   constructor(sharedVarOfExec: SharedVarOfExec, docVersion: Version | undefined) {
@@ -26,6 +26,7 @@ export class DOCExecutable extends AbstractExecutable<DOCTest> {
       return this.shared.testGrouping;
     } else {
       const grouping = { groupByExecutable: this._getGroupByExecutable() };
+      grouping.groupByExecutable.groupByTags = { tags: [], tagFormat: '${tag}' };
       return grouping;
     }
   }
@@ -77,16 +78,19 @@ export class DOCExecutable extends AbstractExecutable<DOCTest> {
     description: string | undefined,
     skipped: string | undefined,
   ): Promise<DOCTest> => {
+    const id = getTestId(file, line, testName);
     const tags: string[] = suiteName ? [suiteName] : [];
     const skippedB = skipped === 'true';
-    const resolvedFile = await this.resolveAndFindSourceFilePath(file);
+    const resolvedFile = this.findSourceFilePath(file);
     return this._createTreeAndAddTest(
       this.getTestGrouping(),
       testName,
       resolvedFile,
+      line,
       tags,
       description,
-      (parent: TestItemParent) => new DOCTest(this, parent, testName, tags, resolvedFile, line, description, skippedB),
+      (parent: TestItemParent) =>
+        new DOCTest(this, parent, id, testName, suiteName, tags, resolvedFile, line, description, skippedB),
       (test: DOCTest) => test.update2(resolvedFile, line, tags, skippedB, description),
     );
   };
@@ -117,8 +121,9 @@ export class DOCExecutable extends AbstractExecutable<DOCTest> {
       '--no-color=true',
     ]);
 
-    this.shared.log.info('discovering tests', this.shared.path, args, this.shared.options.cwd);
-    const docTestListOutput = await this.shared.spawner.spawnAsync(this.shared.path, args, this.shared.options, 30000);
+    const pathForExecution = await this._getPathForExecution();
+    this.shared.log.info('discovering tests', this.shared.path, pathForExecution, args, this.shared.options.cwd);
+    const docTestListOutput = await this.shared.spawner.spawnAsync(pathForExecution, args, this.shared.options, 30000);
 
     if (docTestListOutput.stderr && !this.shared.ignoreTestEnumerationStdErr) {
       this.shared.log.warn(
@@ -142,38 +147,84 @@ export class DOCExecutable extends AbstractExecutable<DOCTest> {
     return result;
   }
 
-  private _getRunParamsCommon(childrenToRun: readonly Readonly<DOCTest>[]): string[] {
-    const execParams: string[] = [];
+  private _getDocTestRunParams(childrenToRun: readonly Readonly<AbstractTest>[]): string[] {
+    const params: string[] = [];
 
-    const testNames = childrenToRun.map(c => c.getEscapedTestName());
-    execParams.push('--test-case=' + testNames.join(','));
-    execParams.push('--no-skip=true');
-
-    execParams.push('--case-sensitive=true');
-    execParams.push('--duration=true');
-
-    if (this.shared.isNoThrow) execParams.push('--no-throw=true');
-
-    if (this.shared.rngSeed !== null) {
-      execParams.push('--order-by=rand');
-      execParams.push('--rand-seed=' + this.shared.rngSeed.toString());
+    if (childrenToRun.length == 1 && childrenToRun[0] instanceof SubTest) {
+      const subTests: SubTest[] = [childrenToRun[0]];
+      let p = childrenToRun[0].parentTest;
+      while (p instanceof SubTest) {
+        subTests.unshift(p);
+        p = p.parentTest;
+      }
+      if (!(p instanceof DOCTest)) throw Error('unexpected doctest issue');
+      if (p.suiteName !== undefined) {
+        params.push('--test-suite=' + p.suiteName);
+      }
+      params.push('--test-case=' + p.getEscapedTestName());
+      params.push('--subcase=' + subTests.map(s => s.id.replaceAll(',', '?')).join(','));
+      params.push('--subcase-filter-levels=' + subTests.length);
+    } else if (childrenToRun.every(v => v instanceof DOCTest)) {
+      const dc = childrenToRun as readonly DOCTest[];
+      if (dc.length && dc[0].suiteName && dc.every(v => v.suiteName === dc[0].suiteName)) {
+        params.push('--test-suite=' + dc[0].suiteName);
+      }
+      const testNames = dc.map(c => c.getEscapedTestName());
+      params.push('--test-case=' + testNames.join(','));
+    } else {
+      this.log.warnS('wrong run/debug combo', childrenToRun);
+      throw Error('Cannot run/debug this combination. Only 1 section or multiple tests can be selected.');
     }
 
-    return execParams;
+    params.push('--no-skip=true');
+    params.push('--case-sensitive=true');
+    params.push('--duration=true');
+    if (this.shared.isNoThrow) params.push('--no-throw=true');
+    if (this.shared.rngSeed !== null) {
+      params.push('--order-by=rand');
+      params.push('--rand-seed=' + this.shared.rngSeed.toString());
+    }
+
+    return params;
   }
 
-  protected _getRunParamsInner(childrenToRun: readonly Readonly<DOCTest>[]): string[] {
-    const execParams: string[] = this._getRunParamsCommon(childrenToRun);
+  protected _getRunParamsInner(childrenToRun: readonly Readonly<AbstractTest>[]): string[] {
+    const execParams: string[] = this._getDocTestRunParams(childrenToRun);
     execParams.push('--reporters=xml');
     return execParams;
   }
 
   // eslint-disable-next-line
-  protected _getDebugParamsInner(childrenToRun: readonly Readonly<DOCTest>[], breakOnFailure: boolean): string[] {
-    const execParams: string[] = this._getRunParamsCommon(childrenToRun);
+  protected _getDebugParamsInner(childrenToRun: readonly Readonly<AbstractTest>[], breakOnFailure: boolean): string[] {
+    const execParams: string[] = this._getDocTestRunParams(childrenToRun);
     execParams.push('--reporters=console');
     execParams.push('--no-breaks=' + (breakOnFailure ? 'false' : 'true'));
     return execParams;
+  }
+
+  protected override _splitTests(tests: readonly AbstractTest[]): (readonly AbstractTest[])[] {
+    const withoutSuite: AbstractTest[] = [];
+    const suites = new Map<string, AbstractTest[]>();
+    for (const test of tests) {
+      if (test instanceof DOCTest) {
+        if (test.suiteName) {
+          const f = suites.get(test.suiteName);
+          if (f) f.push(test);
+          else {
+            const s = [test];
+            suites.set(test.suiteName, s);
+          }
+        } else {
+          withoutSuite.push(test);
+        }
+      } else {
+        this.shared.log.error('expected DOCTest but got something else');
+      }
+    }
+    const result: AbstractTest[][] = [];
+    if (withoutSuite.length) result.push(withoutSuite);
+    result.push(...suites.values());
+    return result;
   }
 
   protected async _handleProcess(testRun: vscode.TestRun, runInfo: RunningExecutable): Promise<HandleProcessResult> {
@@ -196,6 +247,7 @@ export class DOCExecutable extends AbstractExecutable<DOCTest> {
             case 'TestSuite':
               return new TestSuiteTagProcessor(
                 executable.shared,
+                runInfo,
                 testRun,
                 runInfo.runPrefix,
                 (testNameAsId: string) => executable._getTest(testNameAsId),
@@ -229,6 +281,9 @@ export class DOCExecutable extends AbstractExecutable<DOCTest> {
   }
 }
 
+const getTestId = (file: string | undefined, line: string | undefined, testName: string) =>
+  `${file ?? ''}:${line ?? ''}:${testName}`;
+
 ///
 
 type Option = Record<string, string> & { rand_seed?: string };
@@ -238,6 +293,7 @@ type Option = Record<string, string> & { rand_seed?: string };
 class TestSuiteTagProcessor implements XmlTagProcessor {
   constructor(
     private readonly shared: SharedVarOfExec,
+    private readonly runInfo: RunningExecutable,
     private readonly testRun: vscode.TestRun,
     private readonly runPrefix: string,
     private readonly findTest: (testNameAsId: string) => DOCTest | undefined,
@@ -267,7 +323,8 @@ class TestSuiteTagProcessor implements XmlTagProcessor {
 
         assert(typeof name === 'string' && name.length > 0);
 
-        let test = this.findTest(name);
+        const testId = getTestId(tag.attribs.filename, tag.attribs.line, name);
+        let test = this.findTest(testId);
         if (!test) {
           this.shared.log.info('TestCase not found in children', tag, name);
           test = await this.create(
@@ -286,7 +343,7 @@ class TestSuiteTagProcessor implements XmlTagProcessor {
         if (skipped) return;
 
         const builder = new TestResultBuilder(test, this.testRun, this.runPrefix, true);
-        return new TestCaseTagProcessor(this.shared, builder, test as DOCTest, tag.attribs, this.options);
+        return new TestCaseTagProcessor(this.shared, builder, this.runInfo, test as DOCTest, tag.attribs, this.options);
       }
     }
   }
@@ -318,7 +375,7 @@ abstract class TagProcessorBase implements XmlTagProcessor {
         // known tag, do nothing
       } else {
         this.shared.log.errorS('unhandled tag:' + tag.name);
-        this.builder.addOutputLine(1, `Unknown XML tag: ${tag.name} with ${JSON.stringify(tag.attribs)}`);
+        this.builder.addReindentedOutput(1, `Unknown XML tag: ${tag.name} with ${JSON.stringify(tag.attribs)}`);
       }
     }
   }
@@ -330,13 +387,13 @@ abstract class TagProcessorBase implements XmlTagProcessor {
         return processor(dataTrimmed, parentTag, this.builder, this.caseData, this.shared);
       } catch (e) {
         this.shared.log.exceptionS(e);
-        this.builder.addOutputLine(1, 'Unknown fatal error: ' + inspect(e));
+        this.builder.addReindentedOutput(1, 'Unknown fatal error: ' + inspect(e));
         this.builder.errored(); //TODO: check this is really working
       }
     } else if (processor === null) {
       // known tag, do nothing
     } else {
-      this.builder.addOutputLine(1, '> ' + dataTrimmed);
+      this.builder.addReindentedOutput(1, dataTrimmed);
     }
   }
 
@@ -418,6 +475,7 @@ class TestCaseTagProcessor extends TagProcessorBase {
   constructor(
     shared: SharedVarOfExec,
     builder: TestResultBuilder,
+    private readonly runInfo: RunningExecutable,
     private readonly test: DOCTest,
     private readonly attribs: Record<string, string>,
     _option: Option,
@@ -427,7 +485,7 @@ class TestCaseTagProcessor extends TagProcessorBase {
 
   async begin(): Promise<void> {
     this.builder.started();
-    const file = await this.test.exec.resolveAndFindSourceFilePath(this.attribs.filename);
+    const file = this.test.exec.findSourceFilePath(this.attribs.filename);
     await this.test.updateFL(file, this.attribs.line);
   }
 
@@ -480,7 +538,10 @@ class TestCaseTagProcessor extends TagProcessorBase {
 
       this.builder[result]();
 
-      this.builder.test.removeMissingSubTests(this.subCases);
+      // if a subtest is run then we don't expect all the sections to arrive so we assume the missing ones weren't run.
+      if (this.runInfo.childrenToRun.length !== 1 || !(this.runInfo.childrenToRun[0] instanceof SubTest)) {
+        this.builder.test.removeMissingSubTests(this.subCases);
+      }
 
       this.builder.build();
     } else {
@@ -507,7 +568,13 @@ class SubCaseProcessor extends TagProcessorBase {
       if (m) label = m[1];
     }
 
-    const subTest = await testBuilder.test.getOrCreateSubTest(attribs.name, label, attribs.filename, attribs.line);
+    const subTest = await testBuilder.test.getOrCreateSubTest(
+      attribs.name,
+      label,
+      attribs.filename,
+      attribs.line,
+      true,
+    );
     const subTestBuilder = testBuilder.createSubTestBuilder(subTest);
     subTestBuilder.passed(); // set as passed and make it failed lateer if error happens
 
@@ -618,12 +685,7 @@ class MessageProcessor implements XmlTagProcessor {
     assert(this.text !== undefined);
 
     if (this.attribs.type === 'FATAL ERROR') {
-      this.builder.addMessageWithOutput(
-        this.attribs.filename,
-        parseLine(this.attribs.line, undefined, -1),
-        this.attribs.type,
-        this.text!,
-      );
+      this.builder.addMessageWithOutput(this.attribs.filename, this.attribs.line, this.attribs.type, this.text!);
       this.caseData.hasFailedExpression = true;
       this.builder.failed();
     } else if (this.attribs.type === 'WARNING') {

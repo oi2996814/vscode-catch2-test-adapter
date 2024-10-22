@@ -2,8 +2,8 @@ import * as os from 'os';
 import * as ansi from 'ansi-colors';
 
 import { ChildProcessWithoutNullStreams } from './util/FSWrapper';
-import { AbstractTest } from './AbstractTest';
-import { LoggerWrapper } from './LoggerWrapper';
+import { AbstractTest } from './framework/AbstractTest';
+import { Logger } from './Logger';
 import { promisify } from 'util';
 import { CancellationToken, generateId } from './Util';
 import { SpawnBuilder } from './Spawner';
@@ -20,7 +20,10 @@ export enum ExecutableRunResultValue {
 ///
 
 export class ExecutableRunResult {
-  private constructor(readonly value: ExecutableRunResultValue, private readonly _error: string | undefined) {}
+  private constructor(
+    readonly value: ExecutableRunResultValue,
+    private readonly _error: string | undefined,
+  ) {}
 
   get Ok(): boolean {
     return this.value === ExecutableRunResultValue.OK;
@@ -122,7 +125,7 @@ export class RunningExecutable {
     } catch {}
   }
 
-  setPriorityAsync(log: LoggerWrapper): void {
+  setPriorityAsync(log: Logger): void {
     const priority = 16;
     let retryOnFailure = 5;
 
@@ -130,7 +133,7 @@ export class RunningExecutable {
       try {
         if (this.terminated) {
           return Promise.resolve();
-        } else if (this.process.pid) {
+        } else if (this.process.pid && this.process.exitCode === null) {
           os.setPriority(this.process.pid, os.constants.priority.PRIORITY_LOW);
           log.debug('setPriority is done', `priority(${priority})`, `pid(${this.process.pid})`);
 
@@ -175,14 +178,16 @@ export class RunningExecutable {
 
   getProcStartLine(): string {
     return (
-      this.runPrefix + ansi.dim(`Started PID#${this.pid} - \`${this.process.spawnfile}\`\r\n`) + this.runPrefix + '\r\n'
+      this.runPrefix + ansi.dim(`Started PID#${this.pid} - '${this.process.spawnfile}'\r\n`) + this.runPrefix + '\r\n'
     );
   }
 
-  getProcStopLine(result: ExecutableRunResult): string {
-    return (
-      this.runPrefix + ansi.dim(`Stopped PID#${this.pid} - ${result.toString()} - \`${this.process.spawnfile}\`\r\n`)
-    );
+  //TODO:future includeArgs
+  getProcStopLine(result: ExecutableRunResult, includeArgs = false): string {
+    const args = includeArgs
+      ? ' ' + this.process.spawnargs.map(a => "'" + a + "'").join(' ')
+      : "'" + this.process.spawnfile + "'";
+    return this.runPrefix + ansi.dim(`Stopped PID#${this.pid} - ${result.toString()} - ${args}\r\n`);
   }
 }
 

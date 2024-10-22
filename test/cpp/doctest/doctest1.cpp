@@ -55,6 +55,7 @@ SCENARIO("vectors can be sized and resized") {
       v.resize(10);
 
       THEN("the size and capacity change") {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         CHECK(v.size() == 20);
         CHECK(v.capacity() >= 10);
       }
@@ -63,6 +64,7 @@ SCENARIO("vectors can be sized and resized") {
       v.resize(0);
 
       THEN("the size changes but not capacity") {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         CHECK(v.size() == 0);
         CHECK(v.capacity() >= 5);
       }
@@ -104,7 +106,7 @@ static void checks(int data) {
   DOCTEST_SUBCASE("check data 2") { REQUIRE(data % 4 == 0); }
 }
 
-TEST_CASE("Nested - related to https://github.com/onqtam/doctest/issues/282") {
+TEST_CASE("Nested - related to https://github.com/doctest/doctest/issues/282") {
   DOCTEST_SUBCASE("generate data variant 1") {
     int data(44);
 
@@ -181,3 +183,13 @@ TEST_CASE("test mix: may_fail & should_fail & expected_failures(1): false false 
 
 TEST_CASE("test timeout: ok - succ" * doctest::timeout(0.1)) { CHECK(true); }
 TEST_CASE("test timeout: fails - fail" * doctest::timeout(0.1)) { std::this_thread::sleep_for(std::chrono::milliseconds(200)); CHECK(true); }
+
+TEST_SUITE("First")
+{
+  TEST_CASE("MyTest") { FAIL(""); }
+}
+
+TEST_SUITE("Second")
+{
+  TEST_CASE("MyTest") { FAIL(""); }
+}

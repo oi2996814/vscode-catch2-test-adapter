@@ -2,21 +2,24 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { inspect, promisify } from 'util';
 
-import { XmlParser, XmlTag, XmlTagProcessor } from '../util/XmlParser';
+import { XmlParser, XmlTag, XmlTagProcessor } from '../../util/XmlParser';
 import { SharedVarOfExec } from '../SharedVarOfExec';
 import { AbstractExecutable, HandleProcessResult } from '../AbstractExecutable';
 import { Catch2Test } from './Catch2Test';
-import { RunningExecutable } from '../RunningExecutable';
-import { SubTestTree } from '../AbstractTest';
-import { CancellationFlag, Version } from '../Util';
-import { TestGroupingConfig } from '../TestGroupingInterface';
-import { TestResultBuilder } from '../TestResultBuilder';
-import { assert, debugBreak } from '../util/DevelopmentHelper';
-import { pipeOutputStreams2Parser, pipeOutputStreams2String, pipeProcess2Parser } from '../util/ParserInterface';
+import { RunningExecutable } from '../../RunningExecutable';
+import { AbstractTest, SubTest, SubTestTree } from '../AbstractTest';
+import { CancellationFlag, Version } from '../../Util';
+import { TestGroupingConfig } from '../../TestGroupingInterface';
+import { TestResultBuilder } from '../../TestResultBuilder';
+import { assert, debugBreak } from '../../util/DevelopmentHelper';
+import { pipeOutputStreams2Parser, pipeOutputStreams2String, pipeProcess2Parser } from '../../util/ParserInterface';
 import { Readable } from 'stream';
 
 export class Catch2Executable extends AbstractExecutable<Catch2Test> {
-  constructor(sharedVarOfExec: SharedVarOfExec, private readonly _catch2Version: Version | undefined) {
+  constructor(
+    sharedVarOfExec: SharedVarOfExec,
+    private readonly _catch2Version: Version | undefined,
+  ) {
     super(sharedVarOfExec, 'Catch2', _catch2Version);
   }
 
@@ -182,12 +185,13 @@ export class Catch2Executable extends AbstractExecutable<Catch2Test> {
       if (matches) matches.forEach((t: string) => tags.push(t.substring(1, t.length - 1)));
     }
 
-    const resolvedFile = await this.resolveAndFindSourceFilePath(file);
+    const resolvedFile = this.findSourceFilePath(file);
 
     return this._createTreeAndAddTest(
       this.getTestGrouping(),
       testName,
       resolvedFile,
+      line,
       tags,
       description,
       (parent: vscode.TestItem | undefined) =>
@@ -217,22 +221,14 @@ export class Catch2Executable extends AbstractExecutable<Catch2Test> {
       }
     }
 
-    const args = this.shared.prependTestListingArgs.concat([
-      '[.],*',
-      '--verbosity',
-      'high',
-      '--list-tests',
-      '--use-colour',
-      'no',
-    ]);
+    const args = this.shared.prependTestListingArgs.concat(['[.],*', '--verbosity', 'high', '--list-tests']);
 
     if (this._catch2Version && this._catch2Version.major >= 3) args.push('--reporter', 'xml');
+    else args.push('--use-colour', 'no');
 
-    this.shared.log.info('discovering tests', this.shared.path, args, this.shared.options.cwd);
-
-    //const process = await this.sharedVarOfExec.spawner.spawn(this.sharedVarOfExec.path, args, this.sharedVarOfExec.options);
-
-    const catch2TestListingProcess = await this.shared.spawner.spawn(this.shared.path, args, this.shared.options);
+    const pathForExecution = await this._getPathForExecution();
+    this.shared.log.info('discovering tests', this.shared.path, pathForExecution, args, this.shared.options.cwd);
+    const catch2TestListingProcess = await this.shared.spawner.spawn(pathForExecution, args, this.shared.options);
 
     const result =
       this._catch2Version && this._catch2Version.major >= 3
@@ -250,11 +246,32 @@ export class Catch2Executable extends AbstractExecutable<Catch2Test> {
     return result;
   }
 
-  protected _getRunParamsInner(childrenToRun: readonly Readonly<Catch2Test>[]): string[] {
-    const execParams: string[] = [];
+  private _getCatch2RunParams(childrenToRun: readonly AbstractTest[]): string[] {
+    const params: string[] = [];
 
-    const testNames = childrenToRun.map(c => c.getEscapedTestName());
-    execParams.push(testNames.join(','));
+    if (childrenToRun.length == 1 && childrenToRun[0] instanceof SubTest) {
+      const subTests: SubTest[] = [childrenToRun[0]];
+      let p = childrenToRun[0].parentTest;
+      while (p instanceof SubTest) {
+        subTests.unshift(p);
+        p = p.parentTest;
+      }
+      assert(p instanceof Catch2Test);
+      params.push((p as Catch2Test).getEscapedTestName());
+      params.push(...subTests.flatMap(s => ['-c', s.id]));
+    } else if (childrenToRun.every(v => v instanceof Catch2Test)) {
+      const testNames = childrenToRun.map(c => (c as Catch2Test).getEscapedTestName());
+      params.push(testNames.join(','));
+    } else {
+      this.log.warnS('wrong run/debug combo', childrenToRun);
+      throw Error('Cannot run/debug this combination. Only 1 section or multiple tests can be selected only.');
+    }
+
+    return params;
+  }
+
+  protected _getRunParamsInner(childrenToRun: readonly AbstractTest[]): string[] {
+    const execParams = this._getCatch2RunParams(childrenToRun);
 
     execParams.push('--reporter');
     execParams.push('xml');
@@ -273,11 +290,8 @@ export class Catch2Executable extends AbstractExecutable<Catch2Test> {
     return execParams;
   }
 
-  protected _getDebugParamsInner(childrenToRun: readonly Catch2Test[], breakOnFailure: boolean): string[] {
-    const debugParams: string[] = [];
-
-    const testNames = childrenToRun.map(c => c.getEscapedTestName());
-    debugParams.push(testNames.join(','));
+  protected _getDebugParamsInner(childrenToRun: readonly AbstractTest[], breakOnFailure: boolean): string[] {
+    const debugParams = this._getCatch2RunParams(childrenToRun);
 
     debugParams.push('--reporter');
     debugParams.push('console');
@@ -331,7 +345,7 @@ export class Catch2Executable extends AbstractExecutable<Catch2Test> {
                 expectedToRunAndFoundTests.push(test);
               }
               const builder = new TestResultBuilder(test, testRun, runInfo.runPrefix, true);
-              return new TestCaseTagProcessor(executable.shared, builder, test, tag.attribs);
+              return new TestCaseTagProcessor(executable.shared, builder, runInfo, test, tag.attribs);
             }
           }
         },
@@ -423,7 +437,7 @@ abstract class TagProcessorBase implements XmlTagProcessor {
         // known tag, do nothing
       } else {
         this.shared.log.errorS('unhandled tag:' + tag.name);
-        this.builder.addOutputLine(1, `Unknown XML tag: ${tag.name} with ${JSON.stringify(tag.attribs)}`);
+        this.builder.addReindentedOutput(1, `Unknown XML tag: ${tag.name} with ${JSON.stringify(tag.attribs)}`);
       }
     }
   }
@@ -435,7 +449,7 @@ abstract class TagProcessorBase implements XmlTagProcessor {
         return processor(dataTrimmed, parentTag, this.builder, this.shared);
       } catch (e) {
         this.shared.log.exceptionS(e);
-        this.builder.addOutputLine(1, 'Unknown fatal error: ' + inspect(e));
+        this.builder.addReindentedOutput(1, 'Unknown fatal error: ' + inspect(e));
         this.builder.errored();
       }
     } else if (processor === null) {
@@ -446,7 +460,10 @@ abstract class TagProcessorBase implements XmlTagProcessor {
         // known tag, do nothing
       } else {
         this.shared.log.errorS('unhandled tag:' + parentTag.name, parentTag);
-        this.builder.addOutputLine(1, `Unknown XML tag: ${parentTag.name} with ${JSON.stringify(parentTag.attribs)}`);
+        this.builder.addReindentedOutput(
+          1,
+          `Unknown XML tag: ${parentTag.name} with ${JSON.stringify(parentTag.attribs)}`,
+        );
       }
     }
   }
@@ -478,6 +495,17 @@ abstract class TagProcessorBase implements XmlTagProcessor {
     ],
     [
       'OverallResults',
+      (tag: XmlTag, builder: TestResultBuilder, _shared: SharedVarOfExec) => {
+        builder.setDurationMilisec(parseFloat(tag.attribs.durationInSeconds) * 1000);
+        if (tag.attribs.failures !== '0') {
+          builder.failed();
+        } else {
+          builder.passed();
+        }
+      },
+    ],
+    [
+      'OverallResultsCases',
       (tag: XmlTag, builder: TestResultBuilder, _shared: SharedVarOfExec) => {
         builder.setDurationMilisec(parseFloat(tag.attribs.durationInSeconds) * 1000);
         if (tag.attribs.failures !== '0') {
@@ -588,6 +616,7 @@ class TestCaseTagProcessor extends TagProcessorBase {
   constructor(
     shared: SharedVarOfExec,
     builder: TestResultBuilder,
+    private readonly runInfo: RunningExecutable,
     private readonly test: Catch2Test,
     private readonly attribs: Record<string, string>,
   ) {
@@ -596,12 +625,15 @@ class TestCaseTagProcessor extends TagProcessorBase {
 
   async begin(): Promise<void> {
     this.builder.started();
-    const file = await this.test.exec.resolveAndFindSourceFilePath(this.attribs.filename);
+    const file = await this.test.exec.findSourceFilePath(this.attribs.filename);
     await this.test.updateFL(file, this.attribs.line);
   }
 
   end(): void {
-    this.builder.test.removeMissingSubTests(this.sections);
+    // if a subtest is run then we don't expect all the sections to arrive so we assume the missing ones weren't run.
+    if (this.runInfo.childrenToRun.length !== 1 || !(this.runInfo.childrenToRun[0] instanceof SubTest)) {
+      this.builder.test.removeMissingSubTests(this.sections);
+    }
     this.builder.build();
   }
 }
@@ -617,7 +649,13 @@ class SectionProcessor extends TagProcessorBase {
   ) {
     if (typeof attribs.name !== 'string' || !attribs.name) throw Error('Section must have name attribute');
 
-    const subTest = await testBuilder.test.getOrCreateSubTest(attribs.name, undefined, attribs.filename, attribs.line);
+    const subTest = await testBuilder.test.getOrCreateSubTest(
+      attribs.name,
+      undefined,
+      attribs.filename,
+      attribs.line,
+      true,
+    );
     const subTestBuilder = testBuilder.createSubTestBuilder(subTest);
 
     let subSections = sections.get(attribs.name);
@@ -684,8 +722,8 @@ class ExpressionProcessor implements XmlTagProcessor {
       this.builder.addMessageWithOutput(
         this.attribs.filename,
         this.attribs.line,
-        `${this.attribs.type} threw an exception: \`${this.exception}\``,
-        'Original:  ' + this.original,
+        (this.attribs.type ?? `Expression`) + ` threw an exception \`${this.exception}\``,
+        this.original ?? '',
       );
     } else {
       this.builder.addExpressionMsg(
@@ -747,7 +785,7 @@ class BenchmarkResultsProcessor implements XmlTagProcessor {
 
   end(): void {
     if (this.failed) {
-      this.builder.addOutputLine(1, 'Failed: `' + this.failed.message + '`');
+      this.builder.addReindentedOutput(1, 'Failed: `' + this.failed.message + '`');
       this.builder.failed();
     } else {
       {
@@ -758,7 +796,7 @@ class BenchmarkResultsProcessor implements XmlTagProcessor {
           .filter(n => n !== 'name')
           .map(key => `- ${key}: ${attribs[key]}`);
 
-        this.builder.addOutputLine(1, ...params);
+        this.builder.addReindentedOutput(1, ...params);
       }
       if (this.mean) {
         const mean = this.mean;
@@ -766,8 +804,8 @@ class BenchmarkResultsProcessor implements XmlTagProcessor {
           .filter(n => n !== 'value')
           .map(key => `- ${key}: ${mean[key]} ns`);
 
-        this.builder.addOutputLine(1, `Mean: ${mean.value} ns:`);
-        this.builder.addOutputLine(1, ...params);
+        this.builder.addReindentedOutput(1, `Mean: ${mean.value} ns:`);
+        this.builder.addReindentedOutput(1, ...params);
       }
       if (this.standardDeviation) {
         const standardDeviation = this.standardDeviation;
@@ -775,15 +813,15 @@ class BenchmarkResultsProcessor implements XmlTagProcessor {
           .filter(n => n !== 'value')
           .map(key => `- ${key}: ${standardDeviation[key]} ns`);
 
-        this.builder.addOutputLine(1, `Standard Deviation: ${standardDeviation.value} ns:`);
-        this.builder.addOutputLine(1, ...params);
+        this.builder.addReindentedOutput(1, `Standard Deviation: ${standardDeviation.value} ns:`);
+        this.builder.addReindentedOutput(1, ...params);
       }
       if (this.outliers) {
         const outliers = this.outliers;
         const params = Object.keys(outliers).map(key => `- ${key}: ${outliers[key]} ns`);
 
-        this.builder.addOutputLine(1, `Outliers:`);
-        this.builder.addOutputLine(1, ...params);
+        this.builder.addReindentedOutput(1, `Outliers:`);
+        this.builder.addReindentedOutput(1, ...params);
       }
 
       this.builder.setDurationMilisec(Date.now() - this.started);

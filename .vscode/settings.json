@@ -98,7 +98,11 @@
     "variant": "cpp",
     "vector": "cpp",
     "*.tcc": "cpp",
-    "memory_resource": "cpp"
+    "memory_resource": "cpp",
+    "__bits": "cpp",
+    "__verbose_abort": "cpp",
+    "compare": "cpp",
+    "concepts": "cpp"
   },
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "[javascript]": {
@@ -110,18 +114,9 @@
   },
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": true
+    "source.fixAll.eslint": "explicit"
   },
-  "todo-tree.general.tags": [
-    "BUG",
-    "HACK",
-    "FIXME",
-    "TODO",
-    "TODO:future",
-    "TODO:nice",
-    "TODO:release",
-    "XXX"
-  ],
+  "todo-tree.general.tags": ["BUG", "HACK", "FIXME", "TODO", "TODO:future", "TODO:nice", "TODO:release", "XXX"],
   "todo-tree.highlights.customHighlight": {
     "TODO:future": {
       "type": "none"
@@ -136,5 +131,12 @@
       "type": "tag",
       "background": "yellow"
     }
+  },
+  "task.allowAutomaticTasks": "on",
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/bower_components": true,
+    "**/*.code-search": true,
+    "/package-lock.json": true
   }
 }

@@ -1,22 +1,23 @@
-import { LoggerWrapper } from './LoggerWrapper';
+import { Logger } from './Logger';
 import * as vscode from 'vscode';
 import { TaskPool } from './util/TaskPool';
 import { ResolveRuleAsync } from './util/ResolveRule';
 import { BuildProcessChecker } from './util/BuildProcessChecker';
 import { CancellationToken } from './Util';
 import { TestItemManager } from './TestItemManager';
-import { FrameworkSpecificConfig } from './AdvancedExecutableInterface';
+import { AbstractExecutable } from './framework/AbstractExecutable';
 
 export class WorkspaceShared {
   constructor(
     readonly workspaceFolder: vscode.WorkspaceFolder,
-    readonly log: LoggerWrapper,
+    readonly log: Logger,
     readonly testController: TestItemManager,
     readonly executeTask: (
       taskName: string,
       varsToResolve: readonly ResolveRuleAsync[],
       cancellationToken: CancellationToken,
     ) => Promise<number | undefined>,
+    readonly sendRetireEvent: (executables: Iterable<AbstractExecutable>) => void,
     readonly varToValue: readonly Readonly<ResolveRuleAsync>[],
     public rngSeed: 'time' | number | null,
     public execWatchTimeout: number,
@@ -28,6 +29,7 @@ export class WorkspaceShared {
     public enabledStrictPattern: boolean,
     public googleTestTreatGMockWarningAs: 'nothing' | 'failure',
     public googleTestGMockVerbose: 'default' | 'info' | 'warning' | 'error',
+    public hideUninterestingOutput: boolean,
   ) {
     this.taskPool = new TaskPool(workerMaxNumber);
     this.buildProcessChecker = new BuildProcessChecker(log);
@@ -55,9 +57,9 @@ export class WorkspaceShared {
     this._execRunningTimeoutChangeEmitter.fire();
   }
 
-  readonly onDidChangeExecRunningTimeout = this._execRunningTimeoutChangeEmitter.event;
-}
+  setExecParsingTimeout(value: number): void {
+    this.execParsingTimeout = value;
+  }
 
-export interface ExecutableShared extends Readonly<FrameworkSpecificConfig> {
-  readonly log: LoggerWrapper;
+  readonly onDidChangeExecRunningTimeout = this._execRunningTimeoutChangeEmitter.event;
 }

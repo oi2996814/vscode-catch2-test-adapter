@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { LoggerWrapper } from './LoggerWrapper';
+import { Logger } from './Logger';
 import { ConfigOfExecGroup } from './ConfigOfExecGroup';
 import { WorkspaceShared } from './WorkspaceShared';
 import { hashString } from './Util';
@@ -13,6 +13,8 @@ import {
   ExecutionWrapperConfig,
 } from './AdvancedExecutableInterface';
 import { platformUtil } from './util/Platform';
+import { cloneRecursively } from './util/ResolveRule';
+import { DebugConfigData } from './DebugConfigType';
 
 type SentryValue = 'question' | 'enable' | 'enabled' | 'disable' | 'disable_1' | 'disable_2' | 'disable_3';
 
@@ -34,6 +36,7 @@ export type Config =
   | 'test.randomGeneratorSeed'
   | 'test.runtimeLimit'
   | 'test.parallelExecutionLimit'
+  | 'discovery.loadOnStartup'
   | 'discovery.gracePeriodForMissing'
   | 'discovery.runtimeLimit'
   | 'discovery.testListCaching'
@@ -48,19 +51,37 @@ export type Config =
   | 'gtest.treatGmockWarningAs'
   | 'gtest.gmockVerbose';
 
+///
+
 class ConfigurationChangeEvent {
-  constructor(private readonly event: vscode.ConfigurationChangeEvent) {}
-  affectsConfiguration(config: Config, resource?: vscode.Uri): boolean {
-    return this.event.affectsConfiguration(`${ConfigSectionBase}.${config}`, resource);
+  constructor(
+    private readonly event: vscode.ConfigurationChangeEvent,
+    public readonly config: Configurations,
+  ) {}
+  affects(config: Config): boolean {
+    return this.event.affectsConfiguration(`${ConfigSectionBase}.${config}`, this.config._workspaceFolderUri);
+  }
+  affectsAny(...config: Config[]): boolean {
+    return config.some(c => this.affects(c));
+  }
+  affectsNotTestMate(...config: string[]): boolean {
+    return config.some(c => this.event.affectsConfiguration(c, this.config._workspaceFolderUri));
   }
 }
+
+///
+
+export const setEnvKey = 'testMate.cpp.debug.setEnv';
 
 ///
 
 export class Configurations {
   private _cfg: vscode.WorkspaceConfiguration;
 
-  constructor(readonly _log: LoggerWrapper, private _workspaceFolderUri: vscode.Uri) {
+  constructor(
+    readonly _log: Logger,
+    readonly _workspaceFolderUri: vscode.Uri,
+  ) {
     this._cfg = vscode.workspace.getConfiguration(ConfigSectionBase, _workspaceFolderUri);
   }
 
@@ -83,33 +104,35 @@ export class Configurations {
     };
   }
 
-  static onDidChange(callbacks: (changeEvent: ConfigurationChangeEvent) => void): vscode.Disposable {
-    return vscode.workspace.onDidChangeConfiguration(changeEvent =>
-      callbacks(new ConfigurationChangeEvent(changeEvent)),
-    );
+  static onDidChange(
+    log: Logger,
+    workspaceFolder: vscode.WorkspaceFolder,
+    callbacks: (changeEvent: ConfigurationChangeEvent) => void,
+  ): vscode.Disposable {
+    return vscode.workspace.onDidChangeConfiguration(changeEvent => {
+      const config = new Configurations(log, workspaceFolder.uri);
+      callbacks(new ConfigurationChangeEvent(changeEvent, config));
+    });
   }
 
   private _hasExtension(id: string): boolean {
     return vscode.extensions.all.find(e => e.id === id) !== undefined;
   }
 
-  getDebugConfigurationTemplate(): DebugConfigData {
+  private _getDebugConfigData(
+    templateFromConfig: vscode.DebugConfiguration | null | 'extensionOnly' | string,
+  ): DebugConfigData {
     const debugConfigData = ((): DebugConfigData => {
-      const templateFromConfig = this._getD<vscode.DebugConfiguration | null | 'extensionOnly'>(
-        'debug.configTemplate',
-        null,
-      );
-
       const template: vscode.DebugConfiguration = {
-        name: '${label} (${suiteLabel})',
+        name: '${label} (${parentLabel})',
         request: 'launch',
         type: 'cppdbg',
       };
 
       if (typeof templateFromConfig === 'object' && templateFromConfig !== null) {
-        Object.assign(template, templateFromConfig);
+        // we need this trick to get rid of the proxy, because asigns works on proxy but not on it's children
+        Object.assign(template, cloneRecursively(templateFromConfig));
         this._log.debug('template', template);
-
         return { template, source: 'userDefined', launchSourceFileMap: {} };
       } else if (templateFromConfig === null) {
         const wpLaunchConfigs = vscode.workspace
@@ -165,6 +188,41 @@ export class Configurations {
             return { template, source: 'fromLaunchJson', launchSourceFileMap: wpLaunchConfigs[i].sourceFileMap };
           }
         }
+      } else if (templateFromConfig === 'extensionOnly') {
+        // do nothing, just fallthrough
+      } else if (typeof templateFromConfig === 'string' && templateFromConfig.startsWith('name:')) {
+        const nameOfLaunchConfigItem = templateFromConfig.substring('name:'.length);
+
+        const wpLaunchConfigs = vscode.workspace
+          .getConfiguration('launch', this._workspaceFolderUri)
+          .get('configurations');
+
+        if (wpLaunchConfigs && Array.isArray(wpLaunchConfigs) && wpLaunchConfigs.length > 0) {
+          for (let i = 0; i < wpLaunchConfigs.length; ++i) {
+            if (wpLaunchConfigs[i].request !== 'launch') continue;
+            if (wpLaunchConfigs[i].name !== nameOfLaunchConfigItem) continue;
+
+            // putting as much known properties as much we can and hoping for the best 🤞
+            Object.assign(template, wpLaunchConfigs[i], {
+              program: '${exec}',
+              target: '${exec}',
+              arguments: '${argsStr}',
+              args: '${argsArray}',
+              cwd: '${cwd}',
+              env: '${envObj}',
+              environment: '${envObjArray}',
+              sourceFileMap: '${sourceFileMapObj}',
+            });
+
+            this._log.info(
+              "using debug config from launch.json by name. If it doesn't work for you please read the manual: https://github.com/matepek/vscode-catch2-test-adapter#or-user-can-manually-fill-it",
+              template,
+              nameOfLaunchConfigItem,
+            );
+
+            return { template, source: 'fromLaunchJsonByName', launchSourceFileMap: wpLaunchConfigs[i].sourceFileMap };
+          }
+        }
       }
 
       if (this._hasExtension('vadimcn.vscode-lldb')) {
@@ -199,7 +257,6 @@ export class Configurations {
 
         return { template, source: 'webfreak.debug', launchSourceFileMap: {} };
       } else if (this._hasExtension('ms-vscode.cpptools')) {
-        // documentation says debug"environment" = [{...}] but that doesn't work
         Object.assign(template, {
           type: 'cppvsdbg',
           linux: { type: 'cppdbg', MIMode: 'gdb' },
@@ -208,7 +265,6 @@ export class Configurations {
           program: '${exec}',
           args: '${argsArray}',
           cwd: '${cwd}',
-          env: '${envObj}',
           environment: '${envObjArray}',
           sourceFileMap: '${sourceFileMapObj}',
         });
@@ -226,6 +282,12 @@ export class Configurations {
     if (typeof platfromProp === 'object') Object.assign(debugConfigData.template, platfromProp);
 
     return debugConfigData;
+  }
+
+  getDebugConfigurationTemplate(): DebugConfigData {
+    return this._getDebugConfigData(
+      this._getD<vscode.DebugConfiguration | null | 'extensionOnly' | string>('debug.configTemplate', null),
+    );
   }
 
   getOrCreateUserId(): string {
@@ -302,6 +364,10 @@ export class Configurations {
           }
         });
     }
+  }
+
+  getLoadAtStartup(): boolean {
+    return this._getD<boolean>('discovery.loadOnStartup', false);
   }
 
   getDebugBreakOnFailure(): boolean {
@@ -391,13 +457,17 @@ export class Configurations {
         pattern,
         undefined,
         undefined,
+        undefined,
         defaultCwd,
         this.getTerminalIntegratedEnv(),
         undefined,
         [],
         { before: [], beforeEach: [], after: [], afterEach: [] },
         defaultParallelExecutionOfExecLimit,
-        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -474,6 +544,8 @@ export class Configurations {
           }
         }
 
+        const exclude: string | null | undefined = obj.exclude;
+
         const cwd: string = typeof obj.cwd === 'string' ? obj.cwd : defaultCwd;
 
         const env: { [prop: string]: string } = typeof obj.env === 'object' ? obj.env : {};
@@ -504,7 +576,15 @@ export class Configurations {
 
         const markAsSkipped: boolean | undefined = obj.markAsSkipped;
 
-        const waitForBuildProcess: boolean | undefined = obj.waitForBuildProcess;
+        const executableCloning: boolean | undefined = obj.executableCloning;
+
+        const executableSuffixToInclude: string[] | undefined = obj.executableSuffixToInclude;
+
+        const waitForBuildProcess: boolean | string | undefined = obj.waitForBuildProcess;
+
+        const debugConfigData: DebugConfigData | undefined = obj['debug.configTemplate']
+          ? this._getDebugConfigData(obj['debug.configTemplate'])
+          : undefined;
 
         const defaultTestGrouping = obj.testGrouping;
 
@@ -525,6 +605,7 @@ export class Configurations {
         return new ConfigOfExecGroup(
           shared,
           pattern,
+          exclude,
           name,
           description,
           cwd,
@@ -535,7 +616,10 @@ export class Configurations {
           parallelizationLimit,
           strictPattern,
           markAsSkipped,
+          executableCloning,
+          executableSuffixToInclude,
           waitForBuildProcess,
+          debugConfigData,
           spawnerConfig,
           sourceFileMap,
           {
@@ -568,9 +652,9 @@ export class Configurations {
     obj?: FrameworkSpecificConfig,
   ): FrameworkSpecificConfig {
     const r: FrameworkSpecificConfig = {};
+    r.testGrouping = defaultTestGrouping;
     if (typeof obj === 'object') {
       if (obj.testGrouping) r.testGrouping = obj.testGrouping;
-      else r.testGrouping = defaultTestGrouping;
 
       if (typeof obj.helpRegex === 'string') r.helpRegex = obj['helpRegex'];
 
@@ -588,7 +672,6 @@ export class Configurations {
 
       if (typeof obj.failIfExceedsLimitNs === 'number') r.failIfExceedsLimitNs = obj.failIfExceedsLimitNs;
     }
-
     return r;
   }
 
@@ -605,16 +688,3 @@ export class Configurations {
     return {};
   }
 }
-
-export type DebugConfigTemplateSource =
-  | 'fromLaunchJson'
-  | 'userDefined'
-  | 'vadimcn.vscode-lldb'
-  | 'ms-vscode.cpptools'
-  | 'webfreak.debug';
-
-export type DebugConfigData = {
-  template: vscode.DebugConfiguration;
-  source: DebugConfigTemplateSource;
-  launchSourceFileMap?: Record<string, string>;
-};

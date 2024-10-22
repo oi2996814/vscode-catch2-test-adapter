@@ -1,12 +1,13 @@
 import { AbstractTest } from '../AbstractTest';
 import { AbstractExecutable } from '../AbstractExecutable';
 import { SharedTestTags } from '../SharedTestTags';
-import { TestItemParent } from '../TestItemManager';
+import { TestItemParent } from '../../TestItemManager';
 
 export class GoogleTestTest extends AbstractTest {
   constructor(
     executable: AbstractExecutable,
     parent: TestItemParent,
+    testNameAsId: string,
     testName: string,
     suiteName: string,
     typeParam: string | undefined,
@@ -14,7 +15,6 @@ export class GoogleTestTest extends AbstractTest {
     file: string | undefined,
     line: string | undefined,
   ) {
-    const testNameAsId = suiteName + '.' + testName;
     super(
       executable,
       parent,

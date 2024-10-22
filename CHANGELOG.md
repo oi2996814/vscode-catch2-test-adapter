@@ -6,6 +6,311 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [4.12.2] - 2024-10-22
+
+### Added
+
+- Workaround to make search faster with exact path specified instead of glob pattern. [related](https://github.com/matepek/vscode-catch2-test-adapter/issues/444)
+
+## [4.12.1] - 2024-10-19
+
+### Fixed
+
+- google test indentation [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/437)
+- google test parsing [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/436)
+- google test parsing: show global env setup and teardown: [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/442)
+
+## [4.12.0] - 2024-03-29
+
+### Added
+
+- `testGrouping.groupByLabel`. ex.: `"testGrouping": { "groupByLabel": { "label": "Release", "groupByExecutable": {}}}`
+
+## [4.11.0] - 2024-03-09
+
+### Changed
+
+- from now `mergeByLabel` configuration only takes `env` in account. ([related](https://github.com/matepek/vscode-catch2-test-adapter/issues/427))
+- Catch2 parser improvements ([related](https://github.com/matepek/vscode-catch2-test-adapter/issues/428))
+
+## [4.10.0] - 2024-03-05
+
+### Added/Changed/Removed
+
+- `files.watcherExclude` is not applied by default anymore: reverts `v4.8.0`.
+- `testMate.test.advancedExecutables` -> `exclude`: Here one can specify a vscode setting to be applied for exclusion.
+
+## [4.9.0] - 2024-02-21
+
+### Added
+
+- `testMate.test.advancedExecutables` - `debug.configTemplate`. ([req](https://github.com/matepek/vscode-catch2-test-adapter/issues/424))
+
+## [4.8.3] - 2024-02-07
+
+### Added
+
+- `testMate.test.advancedExecutables` - `executableSuffixToInclude` for [custom filtering](https://github.com/matepek/vscode-catch2-test-adapter/issues/415).
+
+## [4.8.2] - 2024-02-07
+
+### Fixed
+
+- issue related to `files.watcherExclude`. It is not working in `v4.8.1`.
+
+## [4.8.1] - 2024-02-07
+
+Improved logging
+
+## [4.8.0] - 2023-12-29
+
+### Changed
+
+- files matching `files.watcherExclude` will be ignored. [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/414)
+- increased max test file count from `10,000` to `100,000`.
+- refactored configuration change event. Not relevant to user but wort to mention.
+
+## [4.7.0] - 2023-12-16
+
+### Added
+
+- `testMate.test.advancedExecutables` - `executableCloning`: (experimental) If enabled it creates a copy of the test executable before listing or running the tests. NOTE: discovery (`--help`) still uses the original file.
+
+## [4.6.3] - 2023-11-17
+
+### Fixed
+
+- issue related to debugging
+
+## [4.6.2] - 2023-10-27
+
+## [4.6.1] - 2023-10-19
+
+### Changed
+
+- using relative path at test output. users can use Cmd+click to navigate.
+
+### Fixed
+
+- issue preventing to cancel continuous runs: [link](https://github.com/matepek/vscode-catch2-test-adapter/issues/398)
+
+## [4.6.0] - 2023-09-11
+
+Implemented new vscode veature: invalidate result.
+
+## [4.5.2] - 2023-08-25
+
+_doctest_ improvements
+
+## [4.5.1] - 2023-07-26
+
+### Fixed
+
+- regression issue related to [doctest](https://github.com/matepek/vscode-catch2-test-adapter/issues/392)
+
+## [4.5.0] - 2023-07-23
+
+### Changed
+
+- doctest default grouping now uses tags which is based on suites [related](https://github.com/matepek/vscode-catch2-test-adapter/issues/391)
+
+### Fixed
+
+- issue that test with same name but different suite are merged in case of doctest [related](https://github.com/matepek/vscode-catch2-test-adapter/issues/391)
+
+## [4.4.4] - 2023-06-07
+
+### Fixed
+
+- issue related to autorun feature.
+
+## [4.4.3] - 2023-06-06
+
+### Fixed
+
+- issue related to autorun feature. It was not picking up some level of tests. [related](https://github.com/matepek/vscode-catch2-test-adapter/issues/387).
+
+## [4.4.2] - 2023-04-28
+
+Improved .env file parser
+
+## [4.4.1] - 2023-04-05
+
+### Added
+
+- support 'multi-environment' tests [feature](https://github.com/matepek/vscode-catch2-test-adapter/issues/379)
+
+## [4.4.0] - 2023-03-31
+
+### Added
+
+- support for vscode "continuous tests" [feature](https://github.com/microsoft/vscode/issues/134941), [release note](https://code.visualstudio.com/updates/v1_77#_finalized-support-for-continuous-test-runs)
+
+## [4.3.12] - 2023-03-22
+
+## [4.3.11] - 2023-03-22
+
+## [4.3.10] - 2022-12-26
+
+### Fixed
+
+- issue related to path resolution. Especially Catch2 related on windows but it also effects source file mapping. [details](https://github.com/matepek/vscode-catch2-test-adapter/issues/367)
+
+## [4.3.9] - 2022-12-25
+
+## [4.3.8] - 2022-12-25
+
+### Fixed
+
+- issue related to path resolution. Especially Catch2 related on windows but it also effects source file mapping. [details](https://github.com/matepek/vscode-catch2-test-adapter/issues/367)
+
+## [4.3.7] - 2022-12-01
+
+## [4.3.6] - 2022-12-01
+
+## [4.3.5] - 2022-11-28
+
+## [4.3.4] - 2022-10-28
+
+## [4.3.3] - 2022-10-22
+
+## [4.3.2] - 2022-10-22
+
+### Fixed
+
+- an issue which prevented to unset variables using `null` value in `"testMate.cpp.debug.setEnv"`
+
+## [4.3.1] - 2022-10-15
+
+### Added
+
+- recursive variable resolution up to 3 levels
+
+## [4.3.0] - 2022-08-05
+
+### Added
+
+- `testMate.cpp.discovery.loadOnStartup`
+
+## [4.2.5] - 2022-07-30
+
+Fixed broken version.
+
+## [4.2.4] - 2022-07-29
+
+! BROKEN !
+
+## [4.2.3] - 2022-07-22
+
+### Added
+
+- new variable resolution rule: `${config:<config name>}` where `<config name>` can be anything like
+
+## [4.2.2] - 2022-05-22
+
+### Added
+
+- improved progress bar and status bar message
+
+## [4.2.1] - 2022-05-21
+
+### Added
+
+- show more progress in case of reloading workspace.
+
+## [4.2.0] - 2022-05-19
+
+### Added
+
+- refresh button to reload the all the tests
+
+## [4.1.1] - 2022-04-26
+
+### Added
+
+- experimental basic support for GUnit framework.
+
+## [4.1.0] - 2022-04-26
+
+### Added
+
+- `mergeByLabel` to `groupByExecutable`. If it is set to true then groups having the same name won't be distingueshed and all their childern will go under the 1 node.
+  Solves [this](https://github.com/matepek/vscode-catch2-test-adapter/issues/337) issue.
+
+### Fixed
+
+- an [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/346) related to Catch2 v3 preview 5
+- an [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/341) related to empty `.env` file parsing.
+
+## [4.0.26] - 2022-02-22
+
+### Changed
+
+- improvements to the built-in default search pattern for waitForBuildProcess
+- waitForBuildProcess can now take a string (custom regex search pattern to match processes), see [issue328](https://github.com/matepek/vscode-catch2-test-adapter/issues/328)
+- changing the `testMate.cpp.discovery.runtimeLimit` option used to take effect only after reloading the window; now it takes effect immediately
+
+## [4.0.25] - 2022-02-05
+
+### Fixed
+
+- fixed GoogleTest cout and cerr parsin [issue#329](https://github.com/matepek/vscode-catch2-test-adapter/issues/329) and [issue#323](https://github.com/matepek/vscode-catch2-test-adapter/issues/323).
+- issue related to [waitForBuildProcess](https://github.com/matepek/vscode-catch2-test-adapter/issues/328)
+
+## [4.0.24] - 2022-02-01
+
+## Changed
+
+- `advancedExecutables.[dependsOn]` property triggers the reolad of all related executables. ([related](https://github.com/matepek/vscode-catch2-test-adapter/issues/326))
+
+## [4.0.23] - 2022-02-01
+
+### Changed
+
+- Removed location added to executabe test item node. [issue](https://github.com/matepek/vscode-catch2-test-adapter/issues/325)
+
+## [4.0.22] - 2022-01-09
+
+### Fixed
+
+- missing subtest name in output window
+
+## [4.0.21] - 2022-01-09
+
+### Added
+
+- enable run and debug option for _doctest_ subtest
+
+### Fixed
+
+- issue which repeated the label as description for SubTests
+
+## [4.0.20] - 2022-01-08
+
+### Added
+
+- experimental advanced tag support
+
+## [4.0.19] - 2022-01-08
+
+### Added
+
+- `debug.configTemplate` can now point to a named item in `launch.json`.
+
+## [4.0.18] - 2022-01-08
+
+### Added
+
+- enable run and debug option for Catch2 sections
+- improved `sourceFileMap` resolution
+
+## [4.0.17] - 2021-12-27
+
+### Changed
+
+- Test groups like _executable_, _suite_ and _source_ (`groupByExecutable`, `groupBySource`, `groupByTags`) will have navigation set to their first found item.
+  This features does not intended to be bullet proof but for the majority of the cases it might provide a useful link. Feel free to provide feedback [here](https://github.com/matepek/vscode-catch2-test-adapter/issues/317).
+
 ## [4.0.16] - 2021-12-17
 
 ### Changed

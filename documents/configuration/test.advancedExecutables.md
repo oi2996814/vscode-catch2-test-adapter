@@ -44,26 +44,30 @@ This variable can be
 
 If it is an object it can contains the following properties:
 
-| Property               | Description                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                 | The name of the test suite (file). Can contains variables related to `pattern`. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                               |
-| `pattern`              | A relative (to workspace directory) or an absolute path or [_glob pattern_](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options). ⚠️**Avoid backslash!**: NO `\\`; (required) [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                       |
-| `description`          | A less prominent text after the `name`. Can contains variables related to `pattern`. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                          |
-| `cwd`                  | The current working directory for the test executable. If it isn't provided and `test.workingDirectory` does then that will be used. Can contains variables related to `pattern`. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                             |
-| `env`                  | Environment variables for the test executable. Can contains variables related to `pattern` and variables related to the process's environment variables (Ex.: `${os_env:PATH}`). [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                              |
-| `envFile`              | File containing environment variables for the test executable. (JSON object or .env file) [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                     |
-| `executionWrapper`     | Specifies an executor which wraps the executions. Useful for emulators. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                                       |
-| `sourceFileMap`        | Replaces the key with the value in the souce file path. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                                                       |
-| `dependsOn`            | Array of (relative / absolute) _paths_ / [_glob pattern_](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options) (string[]). If a related file is _changed/created/deleted_ and autorun is enabled in "..." menu it will run the related executables. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md) |
-| `runTask`              | Tasks to run before running/debugging tests. The task should be defined like any other task in vscode (e.g. in tasks.json). If the task exits with a non-zero code, execution of tests will be halted. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                        |
-| `parallelizationLimit` | The variable maximize the number of the parallel execution of one executable instance. Note: `testMate.cpp.test.parallelExecutionLimit` is a global limit. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                    |
-| `strictPattern`        | Test loading fails if one of the files matched by `pattern` is not a test executable. (Helps noticing unexpected crashes/problems under test loading.)                                                                                                                                                                                                                                                        |
-| `markAsSkipped`        | If true then all the tests related to the pattern are skipped. They can be run manually though.                                                                                                                                                                                                                                                                                                               |
-| `waitForBuildProcess`  | (experimental) Prevents the extension of auto-reloading. With this linking failure might can be avoided.                                                                                                                                                                                                                                                                                                      |
-| `catch2`               | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
-| `gtest`                | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
-| `doctest`              | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
-| `gbenchmark`           | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
+| Property                    | Description                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                      | The name of the test suite (file). Can contains variables related to `pattern`. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                               |
+| `pattern`                   | A relative (to workspace directory) or an absolute path or [_glob pattern_](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options). ⚠️**Avoid backslash!**: NO `\\`; (required) [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                       |
+| `exclude`                   | Setting path like `files.watcherExclude` to use for test lookup.                                                                                                                                                                                                                                                                                                                                              |
+| `description`               | A less prominent text after the `name`. Can contains variables related to `pattern`. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                          |
+| `cwd`                       | The current working directory for the test executable. If it isn't provided and `test.workingDirectory` does then that will be used. Can contains variables related to `pattern`. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                             |
+| `env`                       | Environment variables for the test executable. Can contains variables related to `pattern` and variables related to the process's environment variables (Ex.: `${os_env:PATH}`). [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                              |
+| `envFile`                   | File containing environment variables for the test executable. (JSON object or .env file) [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                     |
+| `executionWrapper`          | Specifies an executor which wraps the executions. Useful for emulators. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                                       |
+| `sourceFileMap`             | Replaces the key with the value in the souce file path. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                                                                                                                       |
+| `dependsOn`                 | Array of (relative / absolute) _paths_ / [_glob pattern_](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options) (string[]). If a related file is _changed/created/deleted_ and autorun is enabled in "..." menu it will run the related executables. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md) |
+| `runTask`                   | Tasks to run before running/debugging tests. The task should be defined like any other task in vscode (e.g. in tasks.json). If the task exits with a non-zero code, execution of tests will be halted. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                        |
+| `parallelizationLimit`      | The variable maximize the number of the parallel execution of one executable instance. Note: `testMate.cpp.test.parallelExecutionLimit` is a global limit. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md)                                                                                                                    |
+| `strictPattern`             | Test loading fails if one of the files matched by `pattern` is not a test executable. (Helps noticing unexpected crashes/problems under test loading.)                                                                                                                                                                                                                                                        |
+| `markAsSkipped`             | If true then all the tests related to the pattern are skipped. They can be run manually though.                                                                                                                                                                                                                                                                                                               |
+| `executableCloning`         | If enabled it creates a copy of the test executable before listing or running the tests. NOTE: discovery (`--help`) still uses the original file.                                                                                                                                                                                                                                                             |
+| `debug.configTemplate`      | Sets the necessary debug configurations and the debug button will work.                                                                                                                                                                                                                                                                                                                                       |
+| `executableSuffixToInclude` | Filter files based on suffix for faster discovery.                                                                                                                                                                                                                                                                                                                                                            |
+| `waitForBuildProcess`       | Prevents the extension of auto-reloading. With this linking failure might can be avoided. Can be true to use a default pattern that works for most cases, or a string to pass your own search pattern (regex) for processes.                                                                                                                                                                                  |
+| `catch2`                    | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
+| `gtest`                     | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
+| `doctest`                   | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
+| `gbenchmark`                | Object with framework specific settings. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#framework-specific-settings)                                                                                                                                                                                                          |
 
 The `pattern` (or the `executables` used as string or an array of strings)
 can contain [_search-pattern_](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options).
@@ -86,6 +90,23 @@ If the pattern is too general like `out/**/*test*`, it could cause unexpected ex
 which would not just increase the test-loading duration but also could have other unexpected effects.
 I suggest to have a stricter file-name convention and a corresponding pattern like `out/**/*.test.*` or `out/**/Test.*`
 
+## `sourceFileMap`
+
+Applies a simple search and replace for the file paths.
+It resolves variables
+
+Examples:
+
+```json
+  "testMate.test.advancedExecutables": [{
+    "pattern": "<default pattern>",
+    "sourceFileMap": {
+      "/path/to/be/replaced/": "/path/I/want/to/use/",
+      "/other-path-to-resolve/": "${workspaceFolder}/"
+    }
+  }]
+```
+
 ## `dependsOn`
 
 - ℹ️Executables found by pattern are automatically watched, don't need to add them to `dependsOn`.
@@ -99,7 +120,7 @@ I suggest to have a stricter file-name convention and a corresponding pattern li
   - Paths on different drive in the same `dependsOn` array maybe won't work.
   - (If you find another corner case, feel free to open an issue. It could be handy once in the future.)
 
-## envFile
+## `envFile`
 
 Probably your best option if your executables need some initinalization of enviroment.
 Use it with `dependsOn` and then in case the `envFile` changes the tests will be retired.
@@ -207,9 +228,10 @@ which can be used in `cwd` and `env` of `executables`:
 | `${os_env_strict:<varname>}` | Resolves it to the given(`<varname>`) environment variable if exists won't set the variable othewise. Can be used ONLY in `env`.                                                             |
 | `${osPathSep}`               | `/` on Linux and macOS, `\` on Windows.                                                                                                                                                      |
 | `${osPathEnvSep}`            | `:` on Linux and macOS, `;` on Windows.                                                                                                                                                      |
+| `${config:<varname>}`        | Resolves it to the given(`<varname>`) vscode config variable. Can be used everywhere.                                                                                                        |
 
 [Array index]ing: `(?:\[(-?[0-9]+)?:(-?[0-9]+)?\])?`.
-Exmaple: `${relPath[:-2]}`: 'a/b/c/d' -> 'a/b'
+Example: `${relPath[:-2]}`: 'a/b/c/d' -> 'a/b'
 
 ## Framework specific settings
 
@@ -293,6 +315,7 @@ It is undocumented. Contact me by opening an issue or read the code a bit.
 
 | Property            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `groupByLabel`      | Groups tests by the given label. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#testgrouping)                                                                                                                                                                                                                                                                      |
 | `groupByExecutable` | Groups tests by the executable file. [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#testgrouping)                                                                                                                                                                                                                                                                  |
 | `groupBySource`     | It sorts the tests by the related source file group. (`${sourceRelPath}`, `${sourceAbsPath}`). [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#testgrouping)                                                                                                                                                                                                        |
 | `groupByTags`       | True to group by every exiting combination of the tags. (`{$tag}`) Or it can be an array of tags: `["[tag1]["tag2"]", "tag2", "tag3"]` [Detail](https://github.com/matepek/vscode-catch2-test-adapter/blob/master/documents/configuration/test.advancedExecutables.md#testgrouping)                                                                                                                                                                |
@@ -388,8 +411,8 @@ Note: This example overused it.
 ## `executionWrapper`
 
 - `${cmd}`
-- `${argsFlat}`: Exmaple: `["pre", "${argsFlat}", "post"]` -> `["pre", "$1", "$2", ..., "$x", "post"]`
-- `${argsStr}`: Exmaple: `["pre", "pre ${argsStr} post", "post"]` -> `["pre", " pre \"$1\" \"$2\" ... \"$x\" post", "post"]`
+- `${argsFlat}`: Example: `["pre", "${argsFlat}", "post"]` -> `["pre", "$1", "$2", ..., "$x", "post"]`
+- `${argsStr}`: Example: `["pre", "pre ${argsStr} post", "post"]` -> `["pre", " pre \"$1\" \"$2\" ... \"$x\" post", "post"]`
 
 Examples:
 
@@ -423,6 +446,23 @@ This is useful if stderr/std::cerr is missing:
     "runTask": {
       "before": [ "taskName in tasks.json" ]
     }
+  }
+]
+```
+
+## running the same executable with different env values
+
+```json
+"testMate.cpp.test.advancedExecutables": [
+  {
+    "name": "${filename} [APPLE=1]",
+    "pattern": "{build,Build,BUILD,out,Out,OUT}/**/*{test,Test,TEST}*",
+    "env":{ "APPLE": "1" }
+  },
+  {
+    "name": "${filename} [APPLE=2]",
+    "pattern": "{build,Build,BUILD,out,Out,OUT}/**/*{test,Test,TEST}*",
+    "env":{ "APPLE": "2" }
   }
 ]
 ```

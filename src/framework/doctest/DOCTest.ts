@@ -1,37 +1,15 @@
 import { AbstractTest } from '../AbstractTest';
 import { AbstractExecutable } from '../AbstractExecutable';
 import { SharedTestTags } from '../SharedTestTags';
-import { TestItemParent } from '../TestItemManager';
-
-interface Frame {
-  name: string;
-  filename: string;
-  line: number;
-}
-
-export class DOCSection implements Frame {
-  constructor(name: string, filename: string, line: number) {
-    this.name = name;
-    // some debug adapter on ubuntu starts debug session in shell,
-    // this prevents the SECTION("`pwd`") to be executed
-    this.name = this.name.replace(/`/g, '\\`');
-
-    this.filename = filename;
-    this.line = line;
-  }
-
-  readonly name: string;
-  readonly filename: string;
-  readonly line: number;
-  readonly children: DOCSection[] = [];
-  failed = false;
-}
+import { TestItemParent } from '../../TestItemManager';
 
 export class DOCTest extends AbstractTest {
   constructor(
     executable: AbstractExecutable,
     parent: TestItemParent,
-    testNameAsId: string,
+    id: string,
+    private readonly testName: string,
+    public readonly suiteName: string | undefined,
     tags: string[],
     file: string | undefined,
     line: string | undefined,
@@ -41,8 +19,8 @@ export class DOCTest extends AbstractTest {
     super(
       executable,
       parent,
-      testNameAsId,
-      testNameAsId.startsWith('  Scenario:') ? testNameAsId.trimLeft() : testNameAsId,
+      id,
+      testName.startsWith('  Scenario:') ? testName.trimStart() : testName,
       file,
       line,
       skipped,
@@ -66,6 +44,6 @@ export class DOCTest extends AbstractTest {
 
   getEscapedTestName(): string {
     /* ',' has special meaning */
-    return this.id.replace(/,/g, '?');
+    return this.testName.replace(/,/g, '?');
   }
 }

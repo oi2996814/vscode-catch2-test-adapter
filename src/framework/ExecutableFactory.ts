@@ -1,16 +1,17 @@
-import * as c2fs from './util/FSWrapper';
+import * as c2fs from '../util/FSWrapper';
 import { SharedVarOfExec } from './SharedVarOfExec';
 import { AbstractExecutable } from './AbstractExecutable';
-import { Catch2Executable } from './framework/Catch2Executable';
-import { GoogleTestExecutable } from './framework/GoogleTestExecutable';
-import { DOCExecutable } from './framework/DOCExecutable';
-import { FrameworkSpecificConfig, RunTaskConfig } from './AdvancedExecutableInterface';
-import { Version } from './Util';
-import { Spawner, SpawnOptionsWithoutStdio } from './Spawner';
-import { GoogleBenchmarkExecutable } from './framework/GoogleBenchmarkExecutable';
-import { ResolveRuleAsync } from './util/ResolveRule';
-import { WorkspaceShared } from './WorkspaceShared';
-import { Framework, FrameworkId, FrameworkType } from './framework/Framework';
+import { Catch2Executable } from './Catch2/Catch2Executable';
+import { GoogleTestExecutable } from './GoogleTest/GoogleTestExecutable';
+import { DOCExecutable } from './doctest/DOCExecutable';
+import { FrameworkSpecificConfig, RunTaskConfig } from '../AdvancedExecutableInterface';
+import { Version } from '../Util';
+import { Spawner, SpawnOptionsWithoutStdio } from '../Spawner';
+import { GoogleBenchmarkExecutable } from './GoogleBenchmark/GoogleBenchmarkExecutable';
+import { ResolveRuleAsync } from '../util/ResolveRule';
+import { WorkspaceShared } from '../WorkspaceShared';
+import { Framework, FrameworkId, FrameworkType } from './Framework';
+import { DebugConfigData } from '../DebugConfigType';
 
 export class ExecutableFactory {
   constructor(
@@ -22,15 +23,24 @@ export class ExecutableFactory {
     private readonly _varToValue: ResolveRuleAsync[],
     private readonly _parallelizationLimit: number,
     private readonly _markAsSkipped: boolean,
+    private readonly _executableCloning: boolean,
+    private readonly _debugConfigData: DebugConfigData | undefined,
+    private readonly _executableSuffixToInclude: Set<string> | undefined,
+    private readonly _executableSuffixToExclude: Set<string> | undefined,
     private readonly _runTask: RunTaskConfig,
     private readonly _spawner: Spawner,
-    private readonly _sourceFileMap: Record<string, string>,
+    private readonly _resolvedSourceFileMap: Record<string, string>,
     private readonly _frameworkSpecific: Record<FrameworkType, FrameworkSpecificConfig>,
   ) {}
 
   async create(checkIsNativeExecutable: boolean): Promise<AbstractExecutable | undefined> {
     const runWithHelpRes = await this._shared.taskPool.scheduleTask(async () => {
-      if (checkIsNativeExecutable) await c2fs.isNativeExecutableAsync(this._execPath);
+      if (checkIsNativeExecutable)
+        await c2fs.isNativeExecutableAsync(
+          this._execPath,
+          this._executableSuffixToInclude,
+          this._executableSuffixToExclude,
+        );
 
       return this._spawner.spawnAsync(this._execPath, ['--help'], this._execOptions, this._shared.execParsingTimeout);
     });
@@ -65,9 +75,11 @@ export class ExecutableFactory {
           frameworkSpecific,
           this._parallelizationLimit,
           this._markAsSkipped,
+          this._executableCloning,
+          this._debugConfigData,
           this._runTask,
           this._spawner,
-          this._sourceFileMap,
+          this._resolvedSourceFileMap,
         );
 
         return frameworkData.create(sharedVarOfExec, match);
@@ -94,7 +106,7 @@ const frameworkDatas: Record<
 > = {
   catch2: {
     priority: 10,
-    regex: /Catch v(\d+)\.(\d+)\.(\d+)\s?/,
+    regex: /Catch2? v(\d+)\.(\d+)\.(\d+)\s?/,
     create: (sharedVarOfExec: SharedVarOfExec, match: RegExpMatchArray) =>
       new Catch2Executable(sharedVarOfExec, parseVersion123(match)),
   },
@@ -128,8 +140,11 @@ const frameworkIdsSorted = Object.keys(frameworkDatas).sort(
 ) as ReadonlyArray<FrameworkId>;
 
 function parseVersion123(match: RegExpMatchArray): Version | undefined {
-  if (match && match.length === 4 && Number(match[1]) !== NaN && Number(match[2]) !== NaN && Number(match[3]) !== NaN) {
-    return new Version(Number(match[1]), Number(match[2]), Number(match[3]));
+  const major = parseInt(match[1]);
+  const minor = parseInt(match[2]);
+  const patch = parseInt(match[3]);
+  if (match && match.length === 4 && !Number.isNaN(major) && !Number.isNaN(minor) && !Number.isNaN(patch)) {
+    return new Version(major, minor, patch);
   } else {
     return undefined;
   }

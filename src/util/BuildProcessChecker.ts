@@ -1,17 +1,16 @@
-import { promisify } from 'util';
-import * as psnode from 'ps-node';
-import { LoggerWrapper } from '../LoggerWrapper';
+import { Logger } from '../Logger';
+import find_process = require('find-process');
 
 ///
 
 // not so nice, init in rootsuite in the future
 export class BuildProcessChecker {
-  constructor(private readonly _log: LoggerWrapper) {}
+  constructor(private readonly _log: Logger) {}
 
   private readonly _checkIntervalMillis = 2000;
   // https://en.wikipedia.org/wiki/List_of_compilers#C++_compilers
-  private readonly _pattern =
-    /[/\\](cmake|make|ninja|cl|c\+\+|ld|clang|gcc|g\+\+|link|icc|armcc|armclang)(-[^/\\]+)?(\.exe)?$/;
+  private readonly _defaultPattern =
+    /(^|[/\\])(bazel|cmake|make|ninja|cl|c\+\+|ld|clang|clang\+\+|gcc|g\+\+|link|icc|armcc|armclang)(-[^/\\]+)?(\.exe)?$/;
   private _lastChecked = 0;
   private _finishedP = Promise.resolve();
   private _finishedResolver = (): void => {}; // eslint-disable-line
@@ -22,7 +21,9 @@ export class BuildProcessChecker {
     this._finishedResolver();
   }
 
-  resolveAtFinish(): Promise<void> {
+  resolveAtFinish(pattern: string | boolean | undefined): Promise<void> {
+    if (pattern === false) return Promise.resolve();
+
     if (this._timerId !== undefined) {
       return this._finishedP;
     }
@@ -37,23 +38,24 @@ export class BuildProcessChecker {
       this._finishedResolver = r;
     });
 
-    this._log.info('Checking running build related processes');
-    this._timerId = setInterval(this._refresh.bind(this), this._checkIntervalMillis);
-    this._refresh();
+    const patternToUse = typeof pattern == 'string' ? RegExp(pattern) : this._defaultPattern;
+    this._log.info('Checking running build related processes', patternToUse);
+    this._timerId = global.setInterval(this._refresh.bind(this, patternToUse), this._checkIntervalMillis);
+    this._refresh(patternToUse);
 
     return this._finishedP;
   }
 
-  private async _refresh(): Promise<void> {
+  private async _refresh(pattern: RegExp): Promise<void> {
     try {
-      const processes = await promisify(psnode.lookup)({
-        command: this._pattern,
-      });
+      const processes = await find_process('name', pattern);
 
       this._lastChecked = Date.now();
 
       if (processes.length > 0) {
-        this._log.info('Found running build related processes: ' + processes.map(x => x.command).join(', '));
+        this._log.info(
+          'Found running build related processes: ' + processes.map(x => JSON.stringify(x, undefined, 0)).join(', '),
+        );
       } else {
         this._log.info('Not found running build related process');
         this._finishedResolver();
@@ -62,6 +64,9 @@ export class BuildProcessChecker {
       }
     } catch (reason) {
       this._log.exceptionS(reason);
+      clearInterval(this._timerId!);
+      this._timerId = undefined;
+      this._finishedResolver();
     }
   }
 }

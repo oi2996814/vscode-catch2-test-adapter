@@ -5,13 +5,13 @@ import { promisify } from 'util';
 import { AbstractExecutable, HandleProcessResult } from '../AbstractExecutable';
 import { GoogleBenchmarkTest } from './GoogleBenchmarkTest';
 import { SharedVarOfExec } from '../SharedVarOfExec';
-import { RunningExecutable } from '../RunningExecutable';
+import { RunningExecutable } from '../../RunningExecutable';
 import { AbstractTest } from '../AbstractTest';
-import { CancellationFlag } from '../Util';
-import { TestGroupingConfig } from '../TestGroupingInterface';
-import { TestResultBuilder } from '../TestResultBuilder';
-import { LoggerWrapper } from '../LoggerWrapper';
-import { TestItemParent } from '../TestItemManager';
+import { CancellationFlag } from '../../Util';
+import { TestGroupingConfig } from '../../TestGroupingInterface';
+import { TestResultBuilder } from '../../TestResultBuilder';
+import { Logger } from '../../Logger';
+import { TestItemParent } from '../../TestItemManager';
 
 export class GoogleBenchmarkExecutable extends AbstractExecutable<GoogleBenchmarkTest> {
   constructor(sharedVarOfExec: SharedVarOfExec) {
@@ -45,6 +45,7 @@ export class GoogleBenchmarkExecutable extends AbstractExecutable<GoogleBenchmar
       this.getTestGrouping(),
       testName,
       undefined,
+      undefined,
       [],
       undefined,
       (parent: TestItemParent) => new GoogleBenchmarkTest(this, parent, testName, this.shared.failIfExceedsLimitNs),
@@ -73,8 +74,9 @@ export class GoogleBenchmarkExecutable extends AbstractExecutable<GoogleBenchmar
 
     const args = this.shared.prependTestListingArgs.concat([`--benchmark_list_tests=true`]);
 
-    this.shared.log.info('discovering tests', this.shared.path, args, this.shared.options.cwd);
-    const listOutput = await this.shared.spawner.spawnAsync(this.shared.path, args, this.shared.options, 30000);
+    const pathForExecution = await this._getPathForExecution();
+    this.shared.log.info('discovering tests', this.shared.path, pathForExecution, args, this.shared.options.cwd);
+    const listOutput = await this.shared.spawner.spawnAsync(pathForExecution, args, this.shared.options, 30000);
 
     if (listOutput.stderr && !this.shared.ignoreTestEnumerationStdErr) {
       this.shared.log.warn('reloadChildren -> googleBenchmarkTestListOutput.stderr: ', listOutput);
@@ -206,7 +208,7 @@ export class GoogleBenchmarkExecutable extends AbstractExecutable<GoogleBenchmar
 }
 
 function parseAndProcessTestCase(
-  log: LoggerWrapper,
+  log: Logger,
   builder: TestResultBuilder<GoogleBenchmarkTest>,
   metric: Record<string, unknown>,
 ): void {
@@ -215,7 +217,7 @@ function parseAndProcessTestCase(
 
   try {
     if (metric['error_occurred']) {
-      builder.addOutputLine(1, '❌ Error occurred:', (metric['error_occurred'] as string).toString());
+      builder.addReindentedOutput(1, '❌ Error occurred:', (metric['error_occurred'] as string).toString());
       builder.errored();
     }
 
@@ -230,8 +232,8 @@ function parseAndProcessTestCase(
         typeof builder.test.failIfExceedsLimitNs === 'number' &&
         builder.test.failIfExceedsLimitNs < value * timeUnitMultiplier
       ) {
-        builder.addOutputLine(1, `❌ Failed: "${key}" exceeded limit: ${builder.test.failIfExceedsLimitNs} ns.`);
-        builder.addOutputLine(1, ' ');
+        builder.addReindentedOutput(1, `❌ Failed: "${key}" exceeded limit: ${builder.test.failIfExceedsLimitNs} ns.`);
+        builder.addReindentedOutput(1, ' ');
         builder.failed();
       }
     }
@@ -239,12 +241,12 @@ function parseAndProcessTestCase(
     Object.keys(metric).forEach(key => {
       const value = metric[key];
       const value2 = typeof value === 'string' ? '"' + value + '"' : value;
-      builder.addOutputLine(1, key + ': ' + value2);
+      builder.addReindentedOutput(1, key + ': ' + value2);
     });
   } catch (e) {
     log.exceptionS(e, metric);
 
-    builder.addOutputLine(
+    builder.addReindentedOutput(
       1,
       '❌ Unexpected ERROR while parsing',
       `Exception: "${e}"`,

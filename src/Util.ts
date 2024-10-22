@@ -60,7 +60,19 @@ export function concat(left: string, right: string, sep = ''): string {
 }
 
 export class Version {
-  constructor(readonly major: number, private readonly _minor?: number, private readonly _patch?: number) {}
+  static from(value: string): Version | undefined {
+    const match = value.match(/^(\d+)(?:\.(\d+)(?:\.(\d+))?)?$/);
+    if (!match) return undefined;
+
+    const [, major, minor, patch] = match;
+    return new Version(Number(major), minor ? Number(minor) : undefined, patch ? Number(patch) : undefined);
+  }
+
+  constructor(
+    readonly major: number,
+    private readonly _minor?: number,
+    private readonly _patch?: number,
+  ) {}
 
   get minor(): number {
     return this._minor ? this._minor : 0;
@@ -159,7 +171,7 @@ export function milisecToStr(durationInMilisec: number): string {
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { promisify } from 'util';
-import { LoggerWrapper } from './LoggerWrapper';
+import { Logger } from './Logger';
 
 type VersionT = [number, number, number];
 export class GoogleTestVersionFinder {
@@ -181,7 +193,7 @@ export class GoogleTestVersionFinder {
 
   private static _version: Promise<VersionT | undefined> | undefined = undefined;
 
-  static Get(log: LoggerWrapper): Promise<VersionT | undefined> {
+  static Get(log: Logger): Promise<VersionT | undefined> {
     if (this._version === undefined) {
       const cancellation = new vscode.CancellationTokenSource();
 
@@ -276,4 +288,18 @@ export function getAbsolutePath(filePath: string, directories: Iterable<string>)
   }
 
   return filePath;
+}
+
+export function getModiTime(path: string): Promise<number | undefined> {
+  return promisify(fs.stat)(path).then(
+    stat => stat.mtimeMs,
+    () => undefined,
+  );
+}
+
+export function waitWithTimout<T>(f: Promise<T>, timeoutMs: number, errMsg?: string): Promise<T> {
+  return Promise.race([
+    f,
+    new Promise<T>((_r, rej) => setTimeout(() => rej(Error(errMsg ?? `Timeout ${timeoutMs} has expired`)), timeoutMs)),
+  ]);
 }

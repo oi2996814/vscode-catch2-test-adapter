@@ -1,41 +1,26 @@
 import * as vscode from 'vscode';
-import { AbstractExecutable, TestsToRun } from './AbstractExecutable';
-import { LoggerWrapper } from './LoggerWrapper';
+import { AbstractExecutable, TestsToRun } from './framework/AbstractExecutable';
+import { Logger } from './Logger';
 import { WorkspaceManager } from './WorkspaceManager';
-import { SharedTestTags } from './SharedTestTags';
+import { SharedTestTags } from './framework/SharedTestTags';
 import { TestItemManager } from './TestItemManager';
 
 ///
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const log = new LoggerWrapper('testMate.cpp.log', 'C++ TestMate');
+  const log = new Logger();
   log.info('Activating extension');
   const controller = vscode.tests.createTestController('testmatecpp', 'TestMate C++');
   const workspace2manager = new Map<vscode.WorkspaceFolder, WorkspaceManager>();
   const testItemManager = new TestItemManager(controller);
-
-  ///
-
-  controller.resolveHandler = (item: vscode.TestItem | undefined): Thenable<void> => {
-    if (item) {
-      const testData = testItemManager.map(item);
-      if (testData) {
-        //testData.resolve();
-        return Promise.resolve();
-      } else {
-        log.errorS('Missing TestData for item', item.id, item.label);
-        return Promise.resolve();
-      }
-    } else {
-      return Promise.allSettled([...workspace2manager.values()].map(manager => manager.load())).then();
-    }
-  };
+  const executableChangedEmitter = new vscode.EventEmitter<Iterable<AbstractExecutable>>();
+  const executableChanged = (e: Iterable<AbstractExecutable>): void => executableChangedEmitter.fire(e);
 
   ///
 
   const addWorkspaceManager = (wf: vscode.WorkspaceFolder): void => {
     if (workspace2manager.get(wf)) log.errorS('Unexpected workspace manager', wf);
-    else workspace2manager.set(wf, new WorkspaceManager(wf, log, testItemManager));
+    else workspace2manager.set(wf, new WorkspaceManager(wf, log, testItemManager, executableChanged));
   };
 
   const removeWorkspaceManager = (wf: vscode.WorkspaceFolder): void => {
@@ -55,6 +40,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
   };
+
+  const initWorkspaceManagers = (forceReload: boolean) =>
+    Promise.allSettled([...workspace2manager.values()].map(manager => manager.init(forceReload))).then<void>();
+
+  const commandReloadWorkspaces = () => {
+    for (const ws of workspace2manager.keys()) {
+      removeWorkspaceManager(ws);
+    }
+
+    // just to make sure
+    controller.items.replace([]);
+
+    addOpenedWorkspaces();
+
+    return initWorkspaceManagers(false);
+  };
+
+  ///
+
+  controller.resolveHandler = (item: vscode.TestItem | undefined): Thenable<void> => {
+    if (item) {
+      const testData = testItemManager.map(item);
+      if (testData) {
+        //testData.resolve();
+        return Promise.resolve();
+      } else {
+        log.errorS('Missing TestData for item', item.id, item.label);
+        return Promise.resolve();
+      }
+    } else {
+      return initWorkspaceManagers(false);
+    }
+  };
+
+  ///
+
+  controller.refreshHandler = (_token: vscode.CancellationToken): Thenable<void> => {
+    return commandReloadWorkspaces();
+  };
+
+  ///
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(event => {
@@ -104,43 +130,94 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let runCount = 0;
   let debugCount = 0;
 
+  const startTestRun = async (request: vscode.TestRunRequest) => {
+    if (debugCount) {
+      vscode.window.showWarningMessage('Cannot run new tests while debugging.');
+      return;
+    }
+
+    const testRun = controller.createTestRun(request);
+    ++runCount;
+
+    try {
+      const managers = collectExecutablesForRun(request);
+
+      const runQueue: Thenable<void>[] = [];
+
+      for (const [manager, executables] of managers) {
+        runQueue.push(
+          manager.run(executables, testRun).catch(e => {
+            vscode.window.showErrorMessage('Unexpected error from run: ' + e);
+          }),
+        );
+      }
+
+      await Promise.allSettled(runQueue);
+    } catch (e) {
+      log.errorS('runHandler errored. never should be here', e);
+    } finally {
+      testRun.end();
+      --runCount;
+    }
+  };
+
+  const testResultInvalidator = executableChangedEmitter.event(executables => {
+    const changedItems: vscode.TestItem[] = [];
+    for (const e of executables) {
+      const ei = e.getExecTestItem();
+      if (ei) changedItems.push(ei);
+      else for (const t of e.getTests()) changedItems.push(t.item);
+    }
+    controller.invalidateTestResults(changedItems);
+  });
+
   const runProfile = controller.createRunProfile(
     'Run Test',
     vscode.TestRunProfileKind.Run,
     async (request: vscode.TestRunRequest, cancellation: vscode.CancellationToken): Promise<void> => {
-      if (debugCount) {
-        vscode.window.showWarningMessage('Cannot run new tests while debugging.');
-        return;
-      }
-
-      const testRun = controller.createTestRun(request);
-      ++runCount;
-
-      try {
-        const managers = collectExecutablesForRun(request);
-
-        const runQueue: Thenable<void>[] = [];
-
-        for (const [manager, executables] of managers) {
-          runQueue.push(manager.run(executables, cancellation, testRun));
-        }
-
-        await Promise.allSettled(runQueue);
-      } catch (e) {
-        log.errorS('runHandler errored. never should be here', e);
-      } finally {
-        testRun.end();
-        --runCount;
+      if (request.continuous) {
+        const l = executableChangedEmitter.event(executables => {
+          const include: vscode.TestItem[] = [];
+          if (request.include === undefined) {
+            for (const e of executables) {
+              const eit = e.getExecTestItem();
+              if (eit) include.push(eit);
+              else for (const t of e.getTests()) include.push(t.item);
+            }
+          } else {
+            for (const item of request.include) {
+              for (const e of executables) {
+                if (e.hasTestItem(item)) {
+                  include.push(item);
+                  break;
+                }
+              }
+            }
+          }
+          startTestRun(new vscode.TestRunRequest(include, request.exclude, request.profile, true));
+        });
+        cancellation.onCancellationRequested(() => l.dispose());
+      } else {
+        return startTestRun(request);
       }
     },
     true,
     SharedTestTags.runnable,
+    true,
   );
+
+  // https://github.com/matepek/vscode-catch2-test-adapter/issues/375
+  let currentDebugExec = '';
+  let currentDebugArgs: string[] = [];
+  const setCurrentDebugVars = (exec: string, args: string[]) => {
+    currentDebugExec = exec;
+    currentDebugArgs = args;
+  };
 
   const debugProfile = controller.createRunProfile(
     'Debug Test',
     vscode.TestRunProfileKind.Debug,
-    async (request: vscode.TestRunRequest, cancellation: vscode.CancellationToken): Promise<void> => {
+    async (request: vscode.TestRunRequest, _cancellation: vscode.CancellationToken): Promise<void> => {
       if (runCount) {
         vscode.window.showWarningMessage('Cannot debug test while running test(s).');
         return;
@@ -176,7 +253,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             return;
           }
           const test = testsToRun.direct[0];
-          runQueue.push(manager.debug(test, cancellation, testRun));
+          runQueue.push(
+            manager
+              .debug(test, testRun, setCurrentDebugVars)
+              .catch(e => {
+                vscode.window.showErrorMessage('Unexpected error from debug: ' + e);
+              })
+              .finally(() => (currentDebugArgs = [])),
+          );
         }
 
         await Promise.allSettled(runQueue);
@@ -198,6 +282,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         removeWorkspaceManager(wf);
       }
       log.info('Disposing controller');
+      testResultInvalidator.dispose();
       runProfile.dispose();
       debugProfile.dispose();
       controller.dispose();
@@ -206,58 +291,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('testMate.cmd.reload-tests', async () => {
-      return Promise.allSettled([...workspace2manager.values()].map(manager => manager.load())).then();
-    }),
+    vscode.commands.registerCommand('testMate.cmd.reload-tests', () => initWorkspaceManagers(true)),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('testMate.cmd.reload-workspaces', async () => {
-      for (const ws of workspace2manager.keys()) {
-        removeWorkspaceManager(ws);
-      }
+    vscode.commands.registerCommand('testMate.cmd.reload-workspaces', commandReloadWorkspaces),
+  );
 
-      // just to make sure
-      controller.items.replace([]);
+  context.subscriptions.push(vscode.commands.registerCommand('testMate.cmd.get-debug-exec', () => currentDebugExec));
 
-      addOpenedWorkspaces();
-      return Promise.allSettled([...workspace2manager.values()].map(manager => manager.load())).then();
-    }),
+  context.subscriptions.push(
+    vscode.commands.registerCommand('testMate.cmd.get-debug-args', () =>
+      currentDebugArgs.map(a => a.replaceAll('"', '\\"')).join('" "'),
+    ),
   );
 
   addOpenedWorkspaces();
 
   log.info('Activation finished');
-}
 
-// import { AbstractTest } from './AbstractTest';
-// import { TestResultBuilder } from './TestResultBuilder';
-//
-// function registerLinkProvider(context: vscode.ExtensionContext) {
-//   context.subscriptions.push(
-//     vscode.window.registerTerminalLinkProvider({
-//       provideTerminalLinks: (context: vscode.TerminalLinkContext, _token: vscode.CancellationToken) => {
-//         if (!context.terminal.name.startsWith('Test Output')) return;
-//         // Detect the first instance of the word "link" if it exists and linkify it
-//         const m = context.line.match(linkRe);
-//         if (m === null) return [];
-//         const l = new vscode.TerminalLink(m.index! + 1, m[0].length - 1);
-//         //eslint-disable-next-line
-//         (l as any)[dataSymbol] = {
-//           line: context.line,
-//           match: m,
-//         };
-//         return [l];
-//       },
-//       handleTerminalLink: (link: vscode.TerminalLink) => {
-//         const data = (link as any)[dataSymbol]; //eslint-disable-line
-//         if (data) {
-//           vscode.window.showTextDocument(data.match[1]);
-//         }
-//       },
-//     }),
-//   );
-// }
-//
-// const dataSymbol = Symbol('TerminalLinkSymbol');
-// const linkRe = new RegExp(TestResultBuilder.relativeLocPrefix + '([^:]+)(?::(\\d+))?');
+  [...workspace2manager.values()].forEach(manager => manager.initAtStartupIfRequestes());
+}

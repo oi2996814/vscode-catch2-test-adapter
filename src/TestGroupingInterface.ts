@@ -1,6 +1,12 @@
+export interface GroupByLabel extends TestGroupingConfig {
+  label?: string;
+  description?: string;
+}
+
 export interface GroupByExecutable extends TestGroupingConfig {
   label?: string;
   description?: string;
+  mergeByLabel?: boolean;
 }
 
 export interface GroupBySource extends TestGroupingConfig {
@@ -33,6 +39,7 @@ export type GroupByRegex = GroupByTagRegex;
 ///
 
 export type TestGroupingType =
+  | 'groupByLabel'
   | 'groupByExecutable'
   | 'groupBySource'
   | 'groupByTags'
@@ -40,6 +47,8 @@ export type TestGroupingType =
   | 'groupByRegex';
 
 export interface TestGroupingConfig extends Partial<Record<TestGroupingType, TestGroupingConfig>> {
+  groupByLabel?: GroupByLabel;
+
   groupByExecutable?: GroupByExecutable;
 
   groupBySource?: GroupBySource;
@@ -57,7 +66,10 @@ export function* testGroupIterator(
   testGrouping: TestGroupingConfig,
 ): IterableIterator<[TestGroupingType, TestGroupingConfig]> {
   while (testGrouping) {
-    if (testGrouping.groupByExecutable) {
+    if (testGrouping.groupByLabel) {
+      testGrouping = testGrouping.groupByLabel;
+      yield ['groupByLabel', testGrouping];
+    } else if (testGrouping.groupByExecutable) {
       testGrouping = testGrouping.groupByExecutable;
       yield ['groupByExecutable', testGrouping];
     } else if (testGrouping.groupBySource) {
@@ -81,6 +93,7 @@ export function* testGroupIterator(
 export async function testGroupingForEach(
   testGrouping: TestGroupingConfig,
   callbacks: {
+    groupByLabel: (g: GroupByLabel) => Promise<void>;
     groupByExecutable: (g: GroupByExecutable) => Promise<void>;
     groupBySource: (g: GroupBySource) => Promise<void>;
     groupByTags: (g: GroupByTags) => Promise<void>;
@@ -89,7 +102,10 @@ export async function testGroupingForEach(
   },
 ): Promise<void> {
   while (testGrouping) {
-    if (testGrouping.groupByExecutable) {
+    if (testGrouping.groupByLabel) {
+      testGrouping = testGrouping.groupByLabel;
+      await callbacks.groupByLabel(testGrouping);
+    } else if (testGrouping.groupByExecutable) {
       testGrouping = testGrouping.groupByExecutable;
       await callbacks.groupByExecutable(testGrouping);
     } else if (testGrouping.groupBySource) {

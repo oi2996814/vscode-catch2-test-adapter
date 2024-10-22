@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AbstractTest } from './AbstractTest';
+import { AbstractTest } from './framework/AbstractTest';
 import { parseLine } from './Util';
 
 ///
@@ -7,7 +7,12 @@ import { parseLine } from './Util';
 export type TestItemParent = vscode.TestItem | undefined;
 
 export interface FilePathResolver {
-  resolveAndFindSourceFilePath(file: string | undefined): Promise<string | undefined>;
+  /**
+   *
+   * @param file don't have to be normalized
+   * @returns normalized file path
+   */
+  findSourceFilePath(file: string | undefined): string | undefined;
 }
 
 export class TestItemManager {
@@ -19,12 +24,13 @@ export class TestItemManager {
 
   createOrReplace(
     parent: vscode.TestItem | undefined,
-    id: string,
+    testId: string,
     label: string,
     file: string | undefined,
     line: string | number | undefined,
     testData: AbstractTest | undefined,
   ): vscode.TestItem {
+    const id = testId;
     const uri: vscode.Uri | undefined = file ? vscode.Uri.file(file) : undefined;
     const item = this.controller.createTestItem(id, label, uri);
     if (uri) {
@@ -33,7 +39,6 @@ export class TestItemManager {
     if (testData) this.testItem2test.set(item, testData);
     else this.testItem2test.delete(item);
 
-    // add will replace it if it has one child with the same id
     if (parent) {
       parent.children.delete(item.id);
       parent.children.add(item);
@@ -60,9 +65,10 @@ export class TestItemManager {
     description: string | undefined | null,
     tags: vscode.TestTag[] | null,
   ): Promise<vscode.TestItem> {
-    const resolvedFile = await fileResolver.resolveAndFindSourceFilePath(file);
+    const resolvedFile = fileResolver.findSourceFilePath(file);
+    const resolvedFileUri = resolvedFile ? vscode.Uri.file(resolvedFile) : undefined;
 
-    if (item.uri?.path !== resolvedFile) {
+    if (item.uri?.fsPath !== resolvedFileUri?.fsPath) {
       const newItem = this.createOrReplace(
         item.parent,
         item.id,
@@ -80,19 +86,19 @@ export class TestItemManager {
       newItem.canResolveChildren = item.canResolveChildren;
 
       return newItem;
+    } else {
+      if (line === undefined) {
+        if (item.range) item.range = undefined;
+      } else if (item.range === undefined || (item.range.start.line + 1).toString() !== line) {
+        const lineP = parseLine(line);
+        if (lineP) item.range = new vscode.Range(lineP - 1, 0, lineP, 0);
+      }
+
+      if (label !== null && item.label !== label) item.label = label;
+      if (description !== null && item.description !== description) item.description = description;
+      if (tags !== null) item.tags = tags;
+
+      return item;
     }
-
-    if (line === undefined) {
-      if (item.range) item.range = undefined;
-    } else if (item.range === undefined || (item.range.start.line + 1).toString() !== line) {
-      const lineP = parseLine(line);
-      if (lineP) item.range = new vscode.Range(lineP - 1, 0, lineP, 0);
-    }
-
-    if (label !== null && item.label !== label) item.label = label;
-    if (description !== null && item.description !== description) item.description = description;
-    if (tags !== null) item.tags = tags;
-
-    return item;
   }
 }

@@ -143,3 +143,33 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+TEST(Std, NoOutput)
+{
+    if(const char* env_p = std::getenv("ENV_TEST"))
+      std::cout << "ENV_TEST: " << env_p << "\n";
+    std::cout << "cout\n";
+    std::cerr << "cerr\n";
+}
+
+TEST(CppMateTest, LeadingWhitespace)
+{
+    std::cout << "First line\n"
+              << "    Second line\n"
+              << "- Third line\n"
+              << "  Fourth line\n";
+    FAIL() << "bad whitespace";
+}
+
+TEST(ThisTest, FailsWithContext) {
+  FAIL() << "This test fails with context";
+}
+
+TEST(ThisTest, FailsWithEmpty) {
+  FAIL();
+  std::cout << "not related";
+}
+
+TEST(ThisTest, AlsoFailsWithContext) {
+  ASSERT_EQ(1, 2) << "Value of [" << 1 << "] is not equal to [" << 2 << "]";
+}

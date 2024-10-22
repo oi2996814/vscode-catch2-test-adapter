@@ -47,5 +47,35 @@ GTEST_TEST(TestCas3, test5) {
 
 GTEST_TEST(TestCas3, test6) {
   std::vector<int> v({5, 10});
-  ASSERT_THAT(v, ::testing::ElementsAre(5, 10, 15));
+  ASSERT_THAT(v, ::testing::ElementsAre(5, 10, 15)) << "extra message";
 }
+
+// with custom matcher
+
+// MATCHER_P(containsTokens, aSubstring, "") {
+//     auto findMe = stripWhitepace(aSubstring);
+//     auto withinMe = stripWhitepace(arg);
+//     if (withinMe.find(findMe) != std::string::npos) {
+//         return true;
+//     }
+//     *result_listener << "\n\n" << aSubstring << "\n\nnot found within\n\n" << arg;
+//     return false;
+// }
+
+// TEST(MySuite, MyTest) {
+//     auto input =
+//         R"(
+//             func foo() {
+//                 x = 4;
+//             }
+//          )";
+
+//     auto expected =
+//         R"(
+//     func foo() {
+//         x = 5;
+//     }
+//     )";
+
+//     ASSERT_THAT(input, containsTokens(expected));
+// }

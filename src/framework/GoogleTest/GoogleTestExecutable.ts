@@ -6,20 +6,23 @@ import * as ansi from 'ansi-colors';
 import { AbstractExecutable as AbstractExecutable, HandleProcessResult } from '../AbstractExecutable';
 import { GoogleTestTest } from './GoogleTestTest';
 import { SharedVarOfExec } from '../SharedVarOfExec';
-import { RunningExecutable } from '../RunningExecutable';
+import { RunningExecutable } from '../../RunningExecutable';
 import { AbstractTest } from '../AbstractTest';
-import { CancellationToken } from '../Util';
-import { TestGroupingConfig, testGroupIterator } from '../TestGroupingInterface';
-import { TestResultBuilder } from '../TestResultBuilder';
-import { XmlParser, XmlTag, XmlTagProcessor } from '../util/XmlParser';
-import { LineProcessor, TextStreamParser } from '../util/TextStreamParser';
-import { assert, debugBreak } from '../util/DevelopmentHelper';
-import { TestItemParent } from '../TestItemManager';
-import { pipeOutputStreams2Parser, pipeOutputStreams2String, pipeProcess2Parser } from '../util/ParserInterface';
+import { CancellationToken } from '../../Util';
+import { TestGroupingConfig } from '../../TestGroupingInterface';
+import { TestResultBuilder } from '../../TestResultBuilder';
+import { XmlParser, XmlTag, XmlTagProcessor } from '../../util/XmlParser';
+import { LambdaLineProcessor, LineProcessor, NoOpLineProcessor, TextStreamParser } from '../../util/TextStreamParser';
+import { assert, debugBreak } from '../../util/DevelopmentHelper';
+import { TestItemParent } from '../../TestItemManager';
+import { pipeOutputStreams2Parser, pipeOutputStreams2String, pipeProcess2Parser } from '../../util/ParserInterface';
 import { Readable } from 'stream';
 
 export class GoogleTestExecutable extends AbstractExecutable<GoogleTestTest> {
-  constructor(sharedVarOfExec: SharedVarOfExec, private readonly _argumentPrefix: string) {
+  constructor(
+    sharedVarOfExec: SharedVarOfExec,
+    private readonly _argumentPrefix: string,
+  ) {
     super(sharedVarOfExec, 'GoogleTest', undefined);
   }
 
@@ -108,17 +111,34 @@ export class GoogleTestExecutable extends AbstractExecutable<GoogleTestTest> {
     typeParam: string | undefined,
     valueParam: string | undefined,
   ): Promise<GoogleTestTest> => {
-    const resolvedFile = await this.resolveAndFindSourceFilePath(file);
-    return this._createTreeAndAddTest(
-      this.getTestGrouping(),
-      testName,
-      resolvedFile,
-      [suiteName],
-      undefined,
-      (parent: TestItemParent) =>
-        new GoogleTestTest(this, parent, testName, suiteName, typeParam, valueParam, resolvedFile, line),
-      (test: GoogleTestTest) => test.update2(testName, suiteName, resolvedFile, line, typeParam, valueParam),
-    );
+    const resolvedFile = this.findSourceFilePath(file);
+    const id = suiteName + '.' + testName;
+    // gunit
+    if (testName === '') {
+      return this._createTreeAndAddTest(
+        this.getTestGrouping(),
+        '<GUnit>',
+        resolvedFile,
+        line,
+        [suiteName],
+        undefined,
+        (parent: TestItemParent) =>
+          new GoogleTestTest(this, parent, id, '<GUnit>', suiteName, typeParam, valueParam, resolvedFile, line),
+        (test: GoogleTestTest) => test.update2('<GUnit>', suiteName, resolvedFile, line, typeParam, valueParam),
+      );
+    } else {
+      return this._createTreeAndAddTest(
+        this.getTestGrouping(),
+        testName,
+        resolvedFile,
+        line,
+        [suiteName],
+        undefined,
+        (parent: TestItemParent) =>
+          new GoogleTestTest(this, parent, id, testName, suiteName, typeParam, valueParam, resolvedFile, line),
+        (test: GoogleTestTest) => test.update2(testName, suiteName, resolvedFile, line, typeParam, valueParam),
+      );
+    }
   };
 
   protected async _reloadChildren(cancellationToken: CancellationToken): Promise<void> {
@@ -145,9 +165,9 @@ export class GoogleTestExecutable extends AbstractExecutable<GoogleTestTest> {
       `--${this._argumentPrefix}output=xml:${cacheFile}`,
     ]);
 
-    this.shared.log.info('discovering tests', this.shared.path, args, this.shared.options.cwd);
-
-    const googleTestListProcess = await this.shared.spawner.spawn(this.shared.path, args, this.shared.options);
+    const pathForExecution = await this._getPathForExecution();
+    this.shared.log.info('discovering tests', this.shared.path, pathForExecution, args, this.shared.options.cwd);
+    const googleTestListProcess = await this.shared.spawner.spawn(pathForExecution, args, this.shared.options);
 
     const loadFromFileIfHas = async (): Promise<boolean> => {
       const hasXmlFile = await promisify(fs.exists)(cacheFile);
@@ -173,30 +193,14 @@ export class GoogleTestExecutable extends AbstractExecutable<GoogleTestTest> {
       }
     };
 
-    // for gtest the source file is only available in the xml output file
-    let canLoadOutput = true;
-    for (const [groupingType] of testGroupIterator(this.getTestGrouping())) {
-      if (groupingType === 'groupBySource') {
-        canLoadOutput = false;
-        break;
-      }
-    }
-
     try {
-      if (canLoadOutput) {
-        await this._reloadFromString(googleTestListProcess.stdout, googleTestListProcess.stderr, cancellationToken);
-        await loadFromFileIfHas();
-      } else {
-        const closedP = new Promise(r => googleTestListProcess.once('close', r));
-        const [stdout, stderr] = await pipeOutputStreams2String(
-          googleTestListProcess.stdout,
-          googleTestListProcess.stderr,
-        );
-        await closedP;
-        const loadedFromFile = await loadFromFileIfHas();
-        if (!loadedFromFile) {
-          await this._reloadFromString(stdout, stderr, cancellationToken);
-        }
+      const [stdout, stderr] = await pipeOutputStreams2String(
+        googleTestListProcess.stdout,
+        googleTestListProcess.stderr,
+      );
+      const loadedFromFile = await loadFromFileIfHas();
+      if (!loadedFromFile) {
+        await this._reloadFromString(stdout, stderr, cancellationToken);
       }
     } catch (e) {
       this.shared.log.warn('reloadChildren error:', e);
@@ -247,39 +251,53 @@ export class GoogleTestExecutable extends AbstractExecutable<GoogleTestTest> {
     const data = { lastBuilder: undefined as TestResultBuilder | undefined };
     // we dont need this now: const rngSeed: number | undefined = typeof this._shared.rngSeed === 'number' ? this._shared.rngSeed : undefined;
 
-    const parser = new TextStreamParser(this.shared.log, {
-      async online(line: string): Promise<void | LineProcessor> {
-        const beginMatch = testBeginRe.exec(line);
-        if (beginMatch) {
-          const testNameAsId = beginMatch[1];
-          const testName = beginMatch[3];
-          const suiteName = beginMatch[2];
-          let test = executable._getTest(testNameAsId);
-          if (!test) {
-            log.info('TestCase not found in children', testNameAsId);
-            test = await executable._createAndAddTest(testName, suiteName, undefined, undefined, undefined, undefined);
-            unexpectedTests.push(test);
+    const parser = new TextStreamParser(
+      this.shared.log,
+      {
+        async online(line: string): Promise<void | LineProcessor> {
+          const beginMatch = testBeginRe.exec(line);
+          if (beginMatch) {
+            const testNameAsId = beginMatch[1];
+            const testName = beginMatch[3];
+            const suiteName = beginMatch[2];
+            let test = executable._getTest(testNameAsId);
+            if (!test) {
+              log.info('TestCase not found in children', testNameAsId);
+              test = await executable._createAndAddTest(
+                testName,
+                suiteName,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+              );
+              unexpectedTests.push(test);
+            } else {
+              expectedToRunAndFoundTests.push(test);
+            }
+            data.lastBuilder = new TestResultBuilder(test, testRun, runInfo.runPrefix, false);
+            return new TestCaseProcessor(executable.shared, testEndRe(test.id), data.lastBuilder);
+          } else if (line.startsWith('[----------] Global test environment tear-down')) {
+            return executable.shared.shared.hideUninterestingOutput
+              ? new NoOpLineProcessor()
+              : new LambdaLineProcessor(l => testRun.appendOutput(runInfo.runPrefix + l + '\r\n'));
           } else {
-            expectedToRunAndFoundTests.push(test);
+            if (
+              line === '' ||
+              ['Running main()', 'Note: Google Test filter =', '[==========]', '[----------]'].some(x =>
+                line.startsWith(x),
+              )
+            ) {
+              if (executable.shared.shared.hideUninterestingOutput == false)
+                testRun.appendOutput(runInfo.runPrefix + line + '\r\n');
+            } else {
+              testRun.appendOutput(runInfo.runPrefix + line + '\r\n');
+            }
           }
-          data.lastBuilder = new TestResultBuilder(test, testRun, runInfo.runPrefix, false);
-          return new TestCaseProcessor(executable.shared, testEndRe(test.id), data.lastBuilder);
-        } else if (line.startsWith('[----------] Global test environment tear-down')) {
-          return new NoOpLineProcessor();
-        } else {
-          if (
-            line === '' ||
-            ['Running main()', 'Note: Google Test filter =', '[==========]', '[----------]'].some(x =>
-              line.startsWith(x),
-            )
-          ) {
-            //skip
-          } else {
-            testRun.appendOutput(runInfo.runPrefix + line + '\r\n');
-          }
-        }
+        },
       },
-    });
+      false,
+    );
 
     await pipeProcess2Parser(runInfo, parser, (data: string) =>
       executable.processStdErr(testRun, runInfo.runPrefix, data),
@@ -318,7 +336,7 @@ class TestSuiteListingProcessor implements XmlTagProcessor {
     switch (tag.name) {
       case 'testcase': {
         assert(this.suiteName);
-        assert(tag.attribs.name);
+        assert(typeof tag.attribs.name == 'string'); // for gunit it can be empty
         await this.create(
           tag.attribs.name,
           this.suiteName!,
@@ -338,7 +356,7 @@ class TestSuiteListingProcessor implements XmlTagProcessor {
 ///
 
 // Remark: not necessarily starts like this so do not use: ^
-const testBeginRe = /\[ RUN      \] ((.+)\.(.+))$/m;
+const testBeginRe = /\[ RUN      \] ((.+)\.(.*))$/m;
 // Ex: "Is True[       OK ] TestCas1.test5 (0 ms)"
 // m[1] == '[       '
 // m[2] == 'OK'
@@ -361,7 +379,10 @@ const testEndRe = (testId: string) =>
 ///
 
 class TestCaseSharedData {
-  constructor(readonly shared: SharedVarOfExec, readonly builder: TestResultBuilder) {}
+  constructor(
+    readonly shared: SharedVarOfExec,
+    readonly builder: TestResultBuilder,
+  ) {}
 
   gMockWarningCount = 0;
 }
@@ -386,7 +407,7 @@ class TestCaseProcessor implements LineProcessor {
       this.testCaseShared.builder.test.line,
       true,
     );
-    this.testCaseShared.builder.addOutputLine(0, ansi.bold(line) + loc);
+    this.testCaseShared.builder.addReindentedOutput(0, ansi.bold(line) + loc);
   }
 
   online(line: string): void | true | LineProcessor {
@@ -413,7 +434,7 @@ class TestCaseProcessor implements LineProcessor {
       }
 
       if (this.testCaseShared.gMockWarningCount) {
-        this.testCaseShared.builder.addOutputLine(
+        this.testCaseShared.builder.addReindentedOutput(
           1,
           '⚠️' + this.testCaseShared.gMockWarningCount + ' GMock warning(s) in the output!',
         );
@@ -421,7 +442,7 @@ class TestCaseProcessor implements LineProcessor {
 
       this.testCaseShared.builder.build();
 
-      this.testCaseShared.builder.addOutputLine(
+      this.testCaseShared.builder.addReindentedOutput(
         0,
         testEndMatch[1] +
           styleFunc(testEndMatch[2]) +
@@ -443,7 +464,7 @@ class TestCaseProcessor implements LineProcessor {
       const fullMsg = failureMatch[5];
       const failureMsg = failureMatch[7];
 
-      this.testCaseShared.builder.addOutputLine(
+      this.testCaseShared.builder.addReindentedOutput(
         1,
         ansi.red(type) + failureMsg + this.builder.getLocationAtStr(file, line, false),
       );
@@ -459,6 +480,8 @@ class TestCaseProcessor implements LineProcessor {
           break;
       }
     }
+
+    this.testCaseShared.builder.addOutput(1, line);
   }
 }
 
@@ -483,10 +506,16 @@ class FailureProcessor implements LineProcessor {
     private readonly fullMsg: string,
   ) {}
 
+  private treatRemainingAsPart: boolean = false;
   private lines: string[] = [];
 
   online(line: string): void | false {
-    if (acceptedAndDecoratedPrefixes.some(prefix => line.startsWith(prefix))) {
+    if (this.treatRemainingAsPart) {
+      if (line.startsWith('[')) {
+        return false;
+      }
+      this.lines.push(line);
+    } else if (acceptedAndDecoratedPrefixes.some(prefix => line.startsWith(prefix))) {
       if (isDecorationEnabled) {
         const first = line.indexOf(':');
         if (first != -1) {
@@ -506,13 +535,16 @@ class FailureProcessor implements LineProcessor {
       this.lines.push(line);
     } else if (line.startsWith('  ')) {
       this.lines.push(line); /* special prefix. This might cause some issue */
+    } else if (line.startsWith('Failed')) {
+      this.lines.push(line);
+      this.treatRemainingAsPart = true;
     } else {
       return false;
     }
   }
 
   end(): void {
-    this.testCaseShared.builder.addOutputLine(2, ...this.lines);
+    this.testCaseShared.builder.addReindentedOutput(2, ...this.lines);
 
     if (isDecorationEnabled) {
       this.testCaseShared.builder.addMarkdownMsg(
@@ -591,16 +623,8 @@ class ExpectCallProcessor implements LineProcessor {
   }
 
   end(): void {
-    this.testCaseShared.builder.addOutputLine(2, ...this.lines);
+    this.testCaseShared.builder.addReindentedOutput(2, ...this.lines);
 
     this.testCaseShared.builder.addMessage(this.file, this.line, this.expected, ...this.actual);
   }
-}
-
-///
-
-class NoOpLineProcessor implements LineProcessor {
-  constructor() {}
-
-  online(_line: string): void {}
 }

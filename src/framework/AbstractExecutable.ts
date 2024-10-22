@@ -1,20 +1,20 @@
 import * as pathlib from 'path';
-import * as fs from 'fs';
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { EOL } from 'os';
 
 import { SharedVarOfExec } from './SharedVarOfExec';
 import { AbstractTest } from './AbstractTest';
-import { TaskPool } from './util/TaskPool';
-import { ExecutableRunResultValue, RunningExecutable } from './RunningExecutable';
+import { TaskPool } from '../util/TaskPool';
+import { ExecutableRunResultValue, RunningExecutable } from '../RunningExecutable';
 import { promisify } from 'util';
-import { Version, getAbsolutePath, CancellationToken, reindentStr } from './Util';
+import { Version, getAbsolutePath, CancellationToken, reindentStr, parseLine, getModiTime } from '../Util';
 import {
-  resolveOSEnvironmentVariables,
   createPythonIndexerForPathVariable,
+  resolveAllAsync,
   ResolveRuleAsync,
   resolveVariablesAsync,
-} from './util/ResolveRule';
+} from '../util/ResolveRule';
 import {
   TestGroupingConfig,
   GroupByExecutable,
@@ -23,14 +23,15 @@ import {
   testGroupingForEach,
   GroupBySource,
   GroupByTags,
-} from './TestGroupingInterface';
-import { isSpawnBusyError } from './util/FSWrapper';
-import { TestResultBuilder } from './TestResultBuilder';
-import { debugAssert, debugBreak } from './util/DevelopmentHelper';
-import { SpawnBuilder } from './Spawner';
+  GroupByLabel,
+} from '../TestGroupingInterface';
+import { isSpawnBusyError } from '../util/FSWrapper';
+import { TestResultBuilder } from '../TestResultBuilder';
+import { debugAssert, debugBreak } from '../util/DevelopmentHelper';
+import { SpawnBuilder } from '../Spawner';
 import { SharedTestTags } from './SharedTestTags';
-import { Disposable } from './Util';
-import { FilePathResolver, TestItemParent } from './TestItemManager';
+import { Disposable } from '../Util';
+import { FilePathResolver, TestItemParent } from '../TestItemManager';
 
 ///
 
@@ -82,11 +83,28 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     return this._tests.get(testId) as TestT;
   }
 
+  public getTests(): Iterable<AbstractTest> {
+    return this._tests.values();
+  }
+
+  public hasTestItem(item: vscode.TestItem): boolean {
+    if (this._execItem.getItem() === item) return true;
+    const found = this._tests.get(item.id);
+    if (found?.item === item) return true;
+    for (const test of this._tests.values()) {
+      const found = test.hasSubTestItem(item);
+      if (found) return true;
+    }
+    return false;
+  }
+
   private async _getOrCreateChildGroup(
     idIn: string | undefined,
     label: string,
     description: string,
     itemOfLevel: vscode.TestItem | undefined,
+    resolvedFile: string | undefined, // sets file only if not exists. can be misleading but we don't know better
+    line: undefined | string | number,
   ): Promise<vscode.TestItem> {
     const childrenOfLevel = this.shared.testController.getChildCollection(itemOfLevel);
     const id = idIn ?? label;
@@ -98,13 +116,12 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
         itemOfLevel,
         id,
         label,
-        undefined,
-        undefined,
+        resolvedFile,
+        line,
         undefined,
       );
       testItem.description = description;
       testItem.tags = SharedTestTags.groupArray;
-      childrenOfLevel.add(testItem);
       return testItem;
     }
   }
@@ -115,11 +132,13 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     label: string,
     description: string | undefined,
     varsToResolve: ResolveRuleAsync<string>[],
+    resolvedFile?: string | undefined,
+    line?: undefined | string | number,
   ): Promise<vscode.TestItem> {
     const resolvedLabel = await this.resolveText(label, ...varsToResolve);
     const resolvedDescr = description !== undefined ? await this.resolveText(description, ...varsToResolve) : '';
 
-    return this._getOrCreateChildGroup(id, resolvedLabel, resolvedDescr, itemOfLevel);
+    return this._getOrCreateChildGroup(id, resolvedLabel, resolvedDescr, itemOfLevel, resolvedFile, line);
   }
 
   private _updateVarsWithTags(tg: TestGroupingConfig, tags: string[], tagsResolveRule: ResolveRuleAsync<string>): void {
@@ -143,14 +162,9 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
   async resolveText(text: string, ...additionalVarToValue: readonly ResolveRuleAsync[]): Promise<string> {
     let resolvedText = text;
     try {
-      resolvedText = await resolveVariablesAsync(resolvedText, this.shared.varToValue);
-
-      resolvedText =
-        additionalVarToValue.length > 0
-          ? await resolveVariablesAsync(resolvedText, additionalVarToValue)
-          : resolvedText;
-
-      resolvedText = resolveOSEnvironmentVariables(resolvedText, false);
+      const varToValue =
+        additionalVarToValue.length > 0 ? [...this.shared.varToValue, ...additionalVarToValue] : this.shared.varToValue;
+      resolvedText = await resolveAllAsync(resolvedText, varToValue, false);
 
       if (resolvedText.match(AbstractExecutable._variableRe))
         this.shared.log.warn('Possibly unresolved variable', resolvedText, text, this);
@@ -169,18 +183,25 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
    */
   private readonly _execItem: ExecutableGroup;
 
-  protected async _createTreeAndAddTest<T extends AbstractTest>(
+  public getExecTestItem(): vscode.TestItem | undefined {
+    return this._execItem.getItem();
+  }
+
+  protected async _createTreeAndAddTest(
     testGrouping: TestGroupingConfig,
     testId: string,
     resolvedFile: string | undefined,
+    lineInFile: string | undefined,
     tags: string[], // in case of google test it is the TestCase
     _description: string | undefined, // currently we don't use it for subtree creation
-    createTest: (parent: TestItemParent) => T,
-    updateTest: (test: T) => void,
-  ): Promise<T> {
+    createTest: (parent: TestItemParent) => TestT,
+    updateTest: (test: TestT) => void,
+  ): Promise<TestT> {
     this.shared.log.info('testGrouping', { testId, resolvedFile, tags, testGrouping });
 
     tags.sort();
+
+    const aboveLineInFile = parseLine(lineInFile, undefined, -1);
 
     const tagsResolveRule: ResolveRuleAsync<string> = {
       resolve: AbstractExecutable._tagVar,
@@ -245,6 +266,8 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
                 label,
                 description,
                 varsToResolve,
+                resolvedFile,
+                aboveLineInFile,
               );
             } else if (g.groupUngroupedTo) {
               itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
@@ -264,45 +287,58 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
       };
 
       await testGroupingForEach(testGrouping, {
+        groupByLabel: async (g: GroupByLabel): Promise<void> => {
+          const label = g.label ?? '${filename}';
+          const id = label;
+          const description = g.description ?? '${relDirpath}${osPathSep}';
+          itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
+            itemOfLevel,
+            id,
+            label,
+            description,
+            varsToResolve,
+            undefined,
+            undefined,
+          );
+        },
         groupByExecutable: async (g: GroupByExecutable): Promise<void> => {
           this._updateVarsWithTags(g, tags, tagsResolveRule);
 
-          const id = this.shared.path;
+          const optionHash = this.shared.optionsHash;
+          const id = (g.mergeByLabel === true ? '' : this.shared.path) + `#${optionHash}`;
           const label = g.label ?? '${filename}';
           const description = g.description ?? '${relDirpath}${osPathSep}';
 
-          itemOfLevel = await this._resolveAndGetOrCreateChildGroup(itemOfLevel, id, label, description, varsToResolve);
+          itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
+            itemOfLevel,
+            id,
+            label,
+            description,
+            varsToResolve,
+            undefined,
+            undefined,
+          );
 
           // special item handling for exec
-          this._execItem.setItem(itemOfLevel, resolvedFile);
+          this._execItem.setItem(itemOfLevel);
         },
         groupBySource: async (g: GroupBySource): Promise<void> => {
           this._updateVarsWithTags(g, tags, tagsResolveRule);
 
           if (resolvedFile) {
+            const id = resolvedFile;
             const label = g.label ?? '${sourceRelPath[-1]}';
             const description = g.description ?? '${sourceRelPath[0:-1]}';
 
             itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
               itemOfLevel,
-              undefined,
+              id,
               label,
               description,
               varsToResolve,
+              resolvedFile,
+              aboveLineInFile,
             );
-
-            // special item handling for source file
-            if (resolvedFile && itemOfLevel.uri === undefined) {
-              itemOfLevel = await this.shared.testController.update(
-                itemOfLevel,
-                resolvedFile,
-                undefined,
-                this,
-                null,
-                null,
-                null,
-              );
-            }
           } else if (g.groupUngroupedTo) {
             itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
               itemOfLevel,
@@ -329,6 +365,8 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
                   g.label ?? AbstractExecutable._tagVar,
                   g.description,
                   varsToResolve,
+                  resolvedFile,
+                  aboveLineInFile,
                 );
               } else if (g.groupUngroupedTo) {
                 itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
@@ -351,6 +389,8 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
                   g.label ?? AbstractExecutable._tagVar,
                   g.description,
                   varsToResolve,
+                  resolvedFile,
+                  aboveLineInFile,
                 );
               } else if (g.groupUngroupedTo) {
                 itemOfLevel = await this._resolveAndGetOrCreateChildGroup(
@@ -376,7 +416,7 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     const found = this.shared.testController.getChildCollection(itemOfLevel).get(testId);
 
     if (found) {
-      const test = this.shared.testController.map(found) as T;
+      const test = this.shared.testController.map(found) as TestT;
       if (!test) throw Error('missing test for item');
       updateTest(test);
       this._addTest(test.id, test);
@@ -419,13 +459,6 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
         `stderr:`,
         `${stderr}`,
       ].join(EOL),
-    );
-  }
-
-  private _getModiTime(): Promise<number | undefined> {
-    return promisify(fs.stat)(this.shared.path).then(
-      stat => stat.mtimeMs,
-      () => undefined,
     );
   }
 
@@ -495,11 +528,18 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     breakOnFailure: boolean,
   ): string[];
 
+  /**
+   * Can be overridden, some cases make it necessary
+   */
+  protected _splitTests(tests: readonly AbstractTest[]): (readonly AbstractTest[])[] {
+    return [tests];
+  }
+
   getDebugParams(childrenToRun: readonly Readonly<AbstractTest>[], breakOnFailure: boolean): string[] {
     return this.shared.prependTestRunningArgs.concat(this._getDebugParamsInner(childrenToRun, breakOnFailure));
   }
 
-  reloadTests(taskPool: TaskPool, cancellationToken: CancellationToken): Promise<void> {
+  reloadTests(taskPool: TaskPool, cancellationToken: CancellationToken, lastModiTime?: number): Promise<void> {
     if (cancellationToken.isCancellationRequested) return Promise.resolve();
 
     // mutually exclusive lock
@@ -509,9 +549,9 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
 
         this.shared.log.info('reloadTests', this.frameworkName, this.frameworkVersion, this.shared.path);
 
-        const lastModiTime = await this._getModiTime();
+        lastModiTime = lastModiTime ?? (await getModiTime(this.shared.path));
 
-        if (this._lastReloadTime === undefined || lastModiTime === undefined || this._lastReloadTime !== lastModiTime) {
+        if (this._lastReloadTime === undefined || lastModiTime === undefined || this._lastReloadTime < lastModiTime) {
           this._lastReloadTime = lastModiTime;
 
           const prevTests = this._tests;
@@ -530,12 +570,7 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     });
   }
 
-  async run(
-    testRun: vscode.TestRun,
-    testsToRun: TestsToRun,
-    taskPool: TaskPool,
-    cancellationToken: CancellationToken,
-  ): Promise<void> {
+  async run(testRun: vscode.TestRun, testsToRun: TestsToRun, taskPool: TaskPool): Promise<void> {
     const testsToRunFinal: AbstractTest[] = [];
 
     for (const t of testsToRun.direct) {
@@ -550,8 +585,8 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     if (testsToRunFinal.length == 0) return;
 
     try {
-      await this.runTasks('beforeEach', taskPool, cancellationToken);
-      //TODO: future: test list might changes: await this.reloadTests(taskPool, cancellationToken);
+      await this.runTasks('beforeEach', taskPool, testRun.token);
+      //TODO:future: test list might changes: await this.reloadTests(taskPool, testRun.token);
       // that case the testsToRunFinal should be after this block
     } catch (e) {
       const msg = e.toString();
@@ -563,15 +598,20 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
       return;
     }
 
-    const buckets = this._splitTestSetForMultirunIfEnabled(testsToRunFinal);
-    await Promise.allSettled(
-      buckets.map(async (bucket: readonly AbstractTest[]) => {
-        const smallerTestSet = this._splitTestsToSmallEnoughSubsets(bucket); //TODO:future merge with _splitTestSetForMultirunIfEnabled
-        for (const testSet of smallerTestSet) await this._runInner(testRun, testSet, taskPool, cancellationToken);
+    const splittedForFramework = this._splitTests(testsToRunFinal);
+    const splittedForMultirun = splittedForFramework.flatMap(v => this._splitTestSetForMultirunIfEnabled(v));
+    const splittedFinal = splittedForMultirun.flatMap(b => this._splitTestsToSmallEnoughSubsets(b)); //TODO:future merge with _splitTestSetForMultirunIfEnabled
+
+    const runningBucketPromises = splittedFinal.map(b =>
+      this._runInner(testRun, b, taskPool).catch(err => {
+        vscode.window.showWarningMessage(err.toString());
       }),
     );
+
+    await Promise.allSettled(runningBucketPromises);
+
     try {
-      await this.runTasks('afterEach', taskPool, cancellationToken);
+      await this.runTasks('afterEach', taskPool, testRun.token);
     } catch (e) {
       const msg = e.toString();
       testRun.appendOutput(msg);
@@ -583,23 +623,18 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     }
   }
 
-  private _runInner(
-    testRun: vscode.TestRun,
-    testsToRun: readonly AbstractTest[],
-    taskPool: TaskPool,
-    cancellation: CancellationToken,
-  ): Promise<void> {
+  private _runInner(testRun: vscode.TestRun, testsToRun: readonly AbstractTest[], taskPool: TaskPool): Promise<void> {
     return this.shared.parallelizationPool.scheduleTask(async () => {
       const runIfNotCancelled = (): Promise<void> => {
-        if (cancellation.isCancellationRequested) {
+        if (testRun.token.isCancellationRequested) {
           this.shared.log.info('test was canceled:', this);
           return Promise.resolve();
         }
-        return this._runProcess(testRun, testsToRun, cancellation);
+        return this._runProcess(testRun, testsToRun);
       };
 
       try {
-        return taskPool.scheduleTask(runIfNotCancelled);
+        return await taskPool.scheduleTask(runIfNotCancelled);
       } catch (err) {
         if (isSpawnBusyError(err)) {
           this.shared.log.info('executable is busy, rescheduled: 2sec', err);
@@ -614,24 +649,45 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
     });
   }
 
-  private async _runProcess(
-    testRun: vscode.TestRun,
-    childrenToRun: readonly AbstractTest[],
-    cancellationToken: CancellationToken,
-  ): Promise<void> {
+  /**
+   * since the cloning executable feature for test listing and test running (not for discovery)
+   * we should use this function which will make sure we are not working on the original file
+   * if the feature is enabled
+   */
+  protected async _getPathForExecution(): Promise<string> {
+    if (!this.shared.executableCloning) {
+      return this.shared.path;
+    }
+    const origModiTime = await getModiTime(this.shared.path);
+    if (origModiTime === undefined) {
+      return this.shared.path; // no file exists, nothing to do
+    }
+
+    const clonePath = ExecCloner.generateClonePath(this.shared.path);
+    const cloneModiTime = await getModiTime(clonePath);
+
+    if (cloneModiTime === undefined || cloneModiTime < origModiTime) {
+      await fs.promises.copyFile(this.shared.path, clonePath, fs.constants.COPYFILE_FICLONE);
+    }
+
+    return clonePath;
+  }
+
+  private async _runProcess(testRun: vscode.TestRun, childrenToRun: readonly AbstractTest[]): Promise<void> {
     const execParams = this._getRunParams(childrenToRun);
 
-    this.shared.log.info('proc starting', this.shared.path, execParams);
+    const pathForExecution = await this._getPathForExecution();
+    this.shared.log.info('proc starting', pathForExecution, execParams, this.shared.path);
 
     const runInfo = await RunningExecutable.create(
-      new SpawnBuilder(this.shared.spawner, this.shared.path, execParams, this.shared.options, undefined),
+      new SpawnBuilder(this.shared.spawner, pathForExecution, execParams, this.shared.options, undefined),
       childrenToRun,
-      cancellationToken,
+      testRun.token,
     );
 
     testRun.appendOutput(runInfo.getProcStartLine());
 
-    this.shared.log.info('proc started', runInfo.process.pid, this.shared.path, this.shared, execParams);
+    this.shared.log.info('proc started', runInfo.process.pid, pathForExecution, this.shared, execParams);
 
     runInfo.setPriorityAsync(this.shared.log);
 
@@ -647,7 +703,7 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
       });
 
       runInfo.process.once('close', (...args) => {
-        this.shared.log.info('proc close:', this.shared.path, args);
+        this.shared.log.info('proc close:', pathForExecution, args);
         trigger('closed');
       });
 
@@ -701,28 +757,28 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
           case ExecutableRunResultValue.OK:
             {
               this.shared.log.errorS('builder should not left behind if no problem', this, leftBehindBuilder);
-              leftBehindBuilder.addOutputLine(0, '❗️ Test run has been cancelled by user.');
+              leftBehindBuilder.addReindentedOutput(0, '❗️ Test run has been cancelled by user.');
               leftBehindBuilder.errored();
             }
             break;
           case ExecutableRunResultValue.CancelledByUser:
             {
               this.shared.log.info('Test run has been cancelled by user. ✋', leftBehindBuilder);
-              leftBehindBuilder.addOutputLine(0, '❓ Test run has been cancelled by user.');
+              leftBehindBuilder.addReindentedOutput(0, '❓ Test run has been cancelled by user.');
               leftBehindBuilder.errored();
             }
             break;
           case ExecutableRunResultValue.TimeoutByUser:
             {
               this.shared.log.info('Test has timed out. See `test.runtimeLimit` for details.', leftBehindBuilder);
-              leftBehindBuilder.addOutputLine(0, '❗️ Test has timed out. See `test.runtimeLimit` for details.');
+              leftBehindBuilder.addReindentedOutput(0, '❗️ Test has timed out. See `test.runtimeLimit` for details.');
               leftBehindBuilder.errored();
             }
             break;
           case ExecutableRunResultValue.Errored:
             {
               this.shared.log.warn('Test has ended unexpectedly.', result, leftBehindBuilder);
-              leftBehindBuilder.addOutputLine(0, '❗️ Test has ended unexpectedly: ' + result.toString());
+              leftBehindBuilder.addReindentedOutput(0, '❗️ Test has ended unexpectedly: ' + result.toString());
               leftBehindBuilder.errored();
             }
             break;
@@ -744,7 +800,7 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
       debugBreak(); // we really shouldnt be here
       this.shared.log.exceptionS(e);
     } finally {
-      this.shared.log.info('proc finished:', this.shared.path);
+      this.shared.log.info('proc finished:', pathForExecution);
     }
   }
 
@@ -778,34 +834,19 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
   findSourceFilePath(file: string | undefined): string | undefined {
     if (typeof file != 'string') return undefined;
 
-    let resolved = file;
+    // normalize before apply resolvedSourceFileMap because it is normalize too
+    // this is for better platfrom independent resolution
+    let resolved = pathlib.normalize(file);
 
-    for (const m in this.shared.sourceFileMap) {
-      resolved = resolved.replace(m, this.shared.sourceFileMap[m]); // Note: it just replaces the first occurence
+    for (const m in this.shared.resolvedSourceFileMap) {
+      resolved = resolved.replace(m, this.shared.resolvedSourceFileMap[m]); // Note: it just replaces the first occurence
     }
 
-    resolved = pathlib.normalize(resolved);
     resolved = this._findFilePath(resolved);
 
     this.shared.log.debug('findSourceFilePath:', file, '=>', resolved);
 
-    return resolved;
-  }
-
-  async resolveAndFindSourceFilePath(file: string | undefined): Promise<string | undefined> {
-    if (typeof file != 'string') return undefined;
-
-    let resolved = file;
-
-    for (const m in this.shared.sourceFileMap) {
-      resolved = resolved.replace(m, this.shared.sourceFileMap[m]); // Note: it just replaces the first occurence
-    }
-
-    resolved = await this.resolveText(resolved);
     resolved = pathlib.normalize(resolved);
-    resolved = this._findFilePath(resolved);
-
-    this.shared.log.debug('resolveAndFindSourceFilePath:', file, '=>', resolved);
 
     return resolved;
   }
@@ -817,7 +858,9 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
 
     const cwd = this.shared.options.cwd?.toString();
 
-    if (cwd && !this.shared.path.startsWith(cwd)) directoriesToCheck.push(cwd);
+    if (cwd && !this.shared.path.startsWith(cwd)) {
+      directoriesToCheck.push(cwd);
+    }
 
     if (
       !this.shared.path.startsWith(this.shared.workspaceFolder.uri.fsPath) &&
@@ -833,7 +876,7 @@ export abstract class AbstractExecutable<TestT extends AbstractTest = AbstractTe
   protected processStdErr(testRun: vscode.TestRun, runPrefix: string, str: string): void {
     testRun.appendOutput(runPrefix + '⬇ std::cerr:\r\n');
     const indented = reindentStr(0, 2, str);
-    testRun.appendOutput(indented.map(x => runPrefix + '> ' + x + '\r\n').join(''));
+    testRun.appendOutput(indented.map(x => runPrefix + x + '\r\n').join(''));
     testRun.appendOutput(runPrefix + '⬆ std::cerr\r\n');
   }
 }
@@ -848,23 +891,24 @@ class ExecutableGroup {
   constructor(private readonly executable: AbstractExecutable<AbstractTest>) {}
 
   private _busyCounter = 0;
-  private _item: vscode.TestItem | undefined = undefined;
+  private _item: vscode.TestItem | undefined | null = undefined;
   private _itemForStaticError: vscode.TestItem | undefined = undefined;
   // we need to be exclusive because we save prevTests
   private _lock = Promise.resolve();
 
-  setItem(item: vscode.TestItem, _resolvedFile: string | undefined) {
-    if (this._item && this._item !== item) {
-      this.executable.shared.log.errorS('why do we have different executableItem');
-      debugBreak('why are we here?');
-    } else if (!this._item) {
+  getItem(): vscode.TestItem | undefined {
+    return this._item ?? undefined;
+  }
+
+  setItem(item: vscode.TestItem) {
+    if (this._item !== undefined) {
+      if (this._item !== null && this._item !== item) {
+        this._item = null;
+      }
+    } else {
       this._item = item;
       if (this._busyCounter > 0) this._item.busy = true;
     }
-
-    // if (resolvedFile) {
-    //   //TODO if (this._item)
-    // }
   }
 
   // makes the item spinning
@@ -924,5 +968,19 @@ export class TestsToRun {
   *[Symbol.iterator](): Iterator<AbstractTest> {
     for (const i of this.direct) yield i;
     for (const i of this.parent) yield i;
+  }
+}
+
+///
+
+export class ExecCloner {
+  private constructor() {}
+
+  public static readonly prefix = '.';
+  public static readonly suffix = '.TestMate.execClone.tmp';
+
+  public static generateClonePath(path: string): string {
+    const { dir, base } = pathlib.parse(path);
+    return pathlib.join(dir, this.prefix + base + this.suffix);
   }
 }
