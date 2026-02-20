@@ -62,7 +62,10 @@ export class ExecutableFactory {
         regex = frameworkData.regex;
       }
 
-      const match = runWithHelpRes.stdout.match(regex);
+      let match = runWithHelpRes.stdout.match(regex);
+      if (!match && framework === Framework.gtest) {  // gtest 1.17.0 outputs on stderr
+        match = runWithHelpRes.stderr.match(regex);
+      }
 
       if (match) {
         const sharedVarOfExec = new SharedVarOfExec(
